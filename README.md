@@ -265,6 +265,76 @@ tests/integration/            Full-conversation + FastAPI TestClient tests
 eval/                         Eval harness (dataset + scoring script)
 ```
 
+## Beyond the assignment: what wasn't explicitly asked for
+
+The assignment names 6 required tools, a defined set of bonuses, and specific
+deliverables. Everything below was added on top of that, either because it
+made the required system stronger or because building/testing it surfaced a
+real gap I wanted to close rather than leave for a reviewer to find.
+
+**Two extra tools** (the doc explicitly allows this, but doesn't ask for it):
+`check_system_status` and `lookup_account_status` (`app/tools/definitions.py`).
+Both replace a static FAQ workaround ("go check the status page yourself")
+with something an actual support bot should be able to do itself. Both are
+mocked the same way the required `escalate_to_human` already is, and both are
+wired all the way through -- planner prompt, tool implementation, `observe`
+step, unit tests, and eval harness scenarios. Details in "Tools beyond the
+assignment's minimum list" above.
+
+**`FakeLLMClient`, a full offline stand-in for the LLM provider**
+(`app/core/llm_client.py`). Not just a stub that returns a fixed string --
+it's rule-based enough to route intents, classify compliance verdicts, and
+produce plausible answers, entirely without network calls. This is what lets
+all 46 tests and the entire eval harness run in under 2 seconds with zero API
+cost, which mattered a lot given the real key is rate-limited (50 req/min)
+and rotates weekly -- I didn't want every test run to compete with actual
+development for that budget.
+
+**A local dev chat UI** (`devtools/chat_ui.html`), a single self-contained
+HTML file with no build step: a chat window plus a live, step-by-step trace
+panel that updates after every message. Not part of the graded system (it's
+outside `app/`, calls the API over plain HTTP) -- built purely so I could
+watch the plan/act/observe/verify cycle happen in real time instead of
+reading raw trace JSON in a terminal. Required adding CORS middleware to
+`app/main.py` so a browser-served page could call the API at all.
+
+**Two small diagnostic scripts** (`scripts/`): `smoke_test_real_key.py` makes
+exactly 2 API calls (one chat, one embedding) to confirm the real key and
+model names work before spending any real budget on the full eval harness;
+`check_env_loading.py` inspects what actually got loaded from `.env` (length,
+stray whitespace, quote characters, BOM bytes) without ever printing the
+secret itself -- came out of a real debugging session where a working key
+still failed silently on Windows.
+
+**Retry logic that doesn't retry the wrong things** (`app/core/llm_client.py`,
+`_llm_retry`). The default naive approach retries every failed API call
+2-3 times with backoff -- fine for a rate limit or a timeout, actively wasteful
+for a bad key or a malformed request, which will never succeed no matter how
+many times you retry them. `_llm_retry()` explicitly excludes
+`AuthenticationError`, `BadRequestError`, `NotFoundError`, and
+`PermissionDeniedError` (across both the OpenAI and Anthropic SDKs) from the
+retry policy, so those fail in one attempt instead of three.
+
+**A server-side Markdown-stripping safety net** (`app/core/text_utils.py`).
+Prompts ask the model for plain text, but that's an instruction, not a
+guarantee -- a real model still occasionally wrote `**bold**`-style Markdown,
+which showed up as literal asterisks in a plain-text response field. Rather
+than rely on the prompt alone, `strip_markdown()` runs on every final
+response server-side regardless of source, with its own test suite (13 unit
+tests) plus an integration test I specifically proved has teeth by disabling
+the fix and confirming it fails before trusting it.
+
+**Deriving the planner's prompt from the real KB instead of hand-typing it**
+(`app/agents/prompts.py::build_plan_system_prompt`). An earlier version of
+this prompt hardcoded a list of "common support categories" from memory, and
+that list was already missing 4 of the KB's 12 real categories the moment it
+was written. The category list is now computed from `data/faq_kb.json` at
+startup, so editing the KB can never make the prompt stale again -- there's
+no second copy of the category list anywhere to forget to update.
+
+**`GET /health`**, a trivial but conventional readiness endpoint most API
+frameworks ship with by default, not asked for in the spec.
+
 ## Production evaluation plan
 
 **Subjective quality (helpfulness, tone, hallucination rate):** LLM-as-judge
