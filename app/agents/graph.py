@@ -18,7 +18,7 @@ from typing import Any, Optional, TypedDict
 from langgraph.graph import END, StateGraph
 
 from app.agents.compliance import ComplianceAgent
-from app.agents.prompts import PLAN_SYSTEM_PROMPT, SYNTHESIZE_SYSTEM_PROMPT, VERIFY_SYSTEM_PROMPT
+from app.agents.prompts import SYNTHESIZE_SYSTEM_PROMPT, VERIFY_SYSTEM_PROMPT, build_plan_system_prompt
 from app.config import Settings
 from app.core.llm_client import LLMClient
 from app.core.state import ConversationState
@@ -55,11 +55,16 @@ class SupportAgentGraph:
         tools: dict[str, Tool],
         settings: Settings,
         conversation_state: ConversationState,
+        faq_categories: list[str],
     ):
         self._llm = llm
         self._tools = tools
         self._settings = settings
         self._conv = conversation_state
+        # Built once per graph instance from the real KB categories -- see
+        # build_plan_system_prompt's docstring for why this isn't a static
+        # hardcoded string.
+        self._plan_system_prompt = build_plan_system_prompt(faq_categories)
         self._graph = self._build_graph()
 
     # ------------------------------------------------------------------
@@ -118,7 +123,7 @@ class SupportAgentGraph:
                 }
                 trace.detail["forced"] = True
             else:
-                messages = [{"role": "system", "content": PLAN_SYSTEM_PROMPT}]
+                messages = [{"role": "system", "content": self._plan_system_prompt}]
                 if self._conv.pending_clarification:
                     messages.append(
                         {

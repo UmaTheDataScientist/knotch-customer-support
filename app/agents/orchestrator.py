@@ -26,6 +26,9 @@ class SupportOrchestrator:
         self._settings = settings
         self._compliance = ComplianceAgent(llm)
         self._tools = build_tools(index, llm, faq_items, settings.faq_top_k, settings.faq_min_score)
+        # Derived from the real KB, not hand-typed -- see
+        # app.agents.prompts.build_plan_system_prompt for why.
+        self._faq_categories = sorted({item.category for item in faq_items})
 
     def handle_message(self, conv: ConversationState, user_message: str) -> ChatMessageOut:
         conv.add_turn(MessageRole.USER, user_message)
@@ -56,7 +59,7 @@ class SupportOrchestrator:
                 iterations=0,
             )
 
-        graph = SupportAgentGraph(self._llm, self._tools, self._settings, conv)
+        graph = SupportAgentGraph(self._llm, self._tools, self._settings, conv, self._faq_categories)
         result = graph.run(user_message)
 
         response_text = result.get("final_response", "")

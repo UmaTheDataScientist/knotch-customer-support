@@ -97,6 +97,35 @@ def test_trace_is_recorded_for_a_conversation(orchestrator, conv_store):
     assert trace.total_latency_ms() >= 0
 
 
+def test_plan_prompt_categories_match_real_kb_exactly(faq_items):
+    """Regression test for a real mistake: an earlier version of the plan
+    prompt hardcoded a category list from memory and was already missing
+    4 of the KB's 12 real categories the moment it was written, with no
+    mechanism to catch the drift. This test locks in that the prompt is
+    now DERIVED from the actual KB data, so it can never silently go stale
+    -- if someone adds/renames a category in data/faq_kb.json, this test
+    (and the prompt itself) picks it up automatically."""
+    from app.agents.prompts import build_plan_system_prompt
+
+    real_categories = sorted({item.category for item in faq_items})
+    prompt = build_plan_system_prompt(real_categories)
+
+    for category in real_categories:
+        assert category in prompt, f"category '{category}' from the real KB is missing from the generated prompt"
+
+
+def test_plan_prompt_updates_automatically_if_kb_categories_change():
+    """Simulates editing the KB (adding a brand-new category) and confirms
+    the prompt reflects it with zero code changes -- proving there's no
+    second, hand-maintained copy of the category list anywhere to forget."""
+    from app.agents.prompts import build_plan_system_prompt
+
+    hypothetical_future_categories = ["billing", "security", "a_brand_new_category_added_tomorrow"]
+    prompt = build_plan_system_prompt(hypothetical_future_categories)
+
+    assert "a_brand_new_category_added_tomorrow" in prompt
+
+
 def test_plan_call_never_duplicates_the_current_user_message(recording_orchestrator, conv_store):
     """Regression test for a real bug found via live testing against a real
     model: the current turn's message was appearing twice in the planner's

@@ -30,7 +30,7 @@ Do NOT flag as unsafe:
 Respond ONLY with compact JSON: {"verdict": "SAFE" or "UNSAFE", "category": string, "reasoning": string}
 """
 
-PLAN_SYSTEM_PROMPT = """You are the planning step of a customer support agent. Given the \
+_PLAN_SYSTEM_PROMPT_TEMPLATE = """You are the planning step of a customer support agent. Given the \
 conversation so far, decide the single next action.
 
 IMPORTANT: If the conversation history shows YOU (the assistant) just asked a clarifying \
@@ -42,19 +42,41 @@ something else?" and the user now says "i forgot my password", that is a clear, 
 password-reset request in context, not a vague one.
 
 Classify the user's intent, then choose exactly one tool call from this list based on the intent:
-- search_faq: the user has a concrete support question that might be in the FAQ.
+- search_faq: the user has a concrete support question that might be in the FAQ. Prefer this tool \
+  whenever the topic plausibly overlaps with the FAQ's actual coverage areas: {categories}. \
+  Try search_faq first for these topics rather than jumping straight to general_knowledge_lookup, \
+  even if you are not certain an exact FAQ entry exists.
 - get_faq_by_category: the user wants an overview of a topic area rather than one specific question.
 - ask_user_clarification: the message is too vague/short to act on (e.g. "x", "help", single words) \
   AND the conversation history does not already resolve that ambiguity.
-- general_knowledge_lookup: a legitimate support-adjacent question with no FAQ coverage.
+- general_knowledge_lookup: a legitimate support-adjacent question with NO plausible coverage under \
+  any of the FAQ categories listed above for search_faq.
 - check_system_status: the user is asking whether the site/app/a specific feature is down or slow right now.
 - lookup_account_status: the user wants to know if a specific account (they've given an id) is active/locked.
 - escalate_to_human: account compromise, data loss, or anything requiring human judgment/authority.
 - refuse: should not happen here (Compliance Agent handles this upstream), but available as a fallback.
 
 Respond ONLY with compact JSON:
-{"intent": string, "tool": string, "tool_args": object, "reasoning": string}
+{{"intent": string, "tool": string, "tool_args": object, "reasoning": string}}
 """
+
+
+def build_plan_system_prompt(faq_categories: list[str]) -> str:
+    """Builds the planner's system prompt with the FAQ category list derived
+    directly from the actual knowledge base, not hand-typed.
+
+    Why this matters: an earlier version of this prompt hardcoded a category
+    list from memory ("passwords, login, billing, subscriptions..."), and it
+    was already missing 4 of the KB's 12 real categories (account_lifecycle,
+    data_recovery, developer, security_incident) the moment it was written --
+    a silent single-source-of-truth violation with no mechanism to catch the
+    drift. Deriving the list here means the prompt is always in sync with
+    whatever data/faq_kb.json actually contains; editing the KB can never
+    make this prompt stale, because there is no second copy of the category
+    list to forget to update.
+    """
+    categories = ", ".join(sorted(set(faq_categories)))
+    return _PLAN_SYSTEM_PROMPT_TEMPLATE.format(categories=categories)
 
 VERIFY_SYSTEM_PROMPT = """You are the verification step of a customer support agent. Given the \
 user's question and the draft answer, check three things:

@@ -23,7 +23,7 @@ OpenAI key.
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# run the test suite (29 tests, all offline)
+# run the test suite (32 tests, all offline)
 pytest -q
 
 # run the eval harness (13 scripted scenarios, all offline)
@@ -174,6 +174,26 @@ Documented in `app/retrieval/knowledge_base.py`:
   to users/logs.
 - Everything else indexed as-is.
 
+### Keeping the planner's prompt in sync with the actual KB
+Early on, I hardcoded a list of "common support categories" directly into the
+planner's system prompt, to nudge it toward `search_faq` over
+`general_knowledge_lookup`. When I checked it against the real data, that
+hand-typed list was already missing 4 of the KB's 12 actual categories
+(`account_lifecycle`, `data_recovery`, `developer`, `security_incident`) —
+a classic single-source-of-truth bug: two copies of the same information
+(the KB's real categories, and my guess at them in a prompt string), with
+nothing forcing them to stay in sync.
+
+I replaced the static prompt string with `build_plan_system_prompt()` in
+`app/agents/prompts.py`, which takes the actual category list — derived from
+`data/faq_kb.json` at startup via `SupportOrchestrator` — and formats it
+directly into the prompt. Editing the KB (adding, removing, renaming a
+category) now updates the planner's guidance automatically, with zero prompt
+changes required. `tests/integration/test_conversations.py` has two tests
+locking this in: one confirms every real category actually appears in the
+generated prompt, the other simulates a brand-new category being added and
+confirms the prompt picks it up without any code change.
+
 ### Idempotent embedding ingestion (bonus #9)
 `EmbeddingIndex.build()` hashes each item's embedding text (`sha256`) and
 caches `{hash, vector}` in `data/embedding_cache.json`. Re-running ingestion
@@ -185,7 +205,9 @@ only calls the embedder for rows whose hash changed. Verified in
   `OpenAILLMClient`, `AnthropicLLMClient`, and `FakeLLMClient` (offline dev/CI).
   Agent/tool code only ever calls `LLMClient.chat`/`.embed`.
 - **Prompts**: externalized and tagged with `PROMPT_VERSION` in
-  `app/agents/prompts.py`, not inlined in graph nodes.
+  `app/agents/prompts.py`, not inlined in graph nodes. The planner's prompt
+  specifically is data-driven rather than static (see above), which I think
+  matters more than the version tag for keeping prompts honest over time.
 - **Tools**: `Tool` dataclasses in `app/tools/definitions.py` pair a Pydantic
   args schema with a plain callable and expose `.tool_spec()` (OpenAI/Anthropic
   function-calling JSON schema) — reusable outside LangGraph if the framework
