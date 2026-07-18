@@ -22,6 +22,7 @@ from app.agents.prompts import SYNTHESIZE_SYSTEM_PROMPT, VERIFY_SYSTEM_PROMPT, b
 from app.config import Settings
 from app.core.llm_client import LLMClient
 from app.core.state import ConversationState
+from app.core.text_utils import strip_markdown
 from app.models.schemas import MessageRole, ResponseSource, TraceStepType
 from app.tools.definitions import Tool
 
@@ -270,7 +271,12 @@ class SupportAgentGraph:
 
     def _finalize_node(self, state: AgentState) -> AgentState:
         with self._conv.tracer.step(TraceStepType.FINAL_RESPONSE) as trace:
-            state["final_response"] = state.get("draft_response", "")
+            # Defensive: strip any Markdown syntax a model produced despite
+            # being instructed not to (see app.core.text_utils). Applied
+            # uniformly regardless of which tool generated the draft --
+            # a no-op for our own plain-text template strings (clarification
+            # questions, refusals, status lookups).
+            state["final_response"] = strip_markdown(state.get("draft_response", ""))
             state["done"] = True
             trace.detail["response"] = state["final_response"]
             trace.detail["verified"] = state.get("verified", False)

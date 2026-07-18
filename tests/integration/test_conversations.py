@@ -126,6 +126,31 @@ def test_plan_prompt_updates_automatically_if_kb_categories_change():
     assert "a_brand_new_category_added_tomorrow" in prompt
 
 
+def test_final_response_strips_markdown_even_if_a_tool_produces_it(orchestrator, conv_store):
+    """Regression test for a real UX bug found via live testing: a real
+    model produced Markdown ("**Settings** -> **Developer**") in a
+    general-knowledge answer, but the chat UI displays responses as plain
+    text (not through a Markdown renderer), so the user saw literal
+    asterisks. Prompts were updated to ask for plain text, but that's not
+    a guarantee -- this test proves the server-side safety net actually
+    fires by directly exercising the finalize node with a crafted draft
+    response containing Markdown."""
+    from app.agents.graph import SupportAgentGraph
+
+    conv = conv_store.get_or_create("markdown-check-1")
+    graph = SupportAgentGraph(
+        orchestrator._llm, orchestrator._tools, orchestrator._settings, conv, ["billing", "security"]
+    )
+    state = {
+        "draft_response": "Go to **Settings** -> **Developer** -> **API Keys**.",
+        "verified": True,
+    }
+    result = graph._finalize_node(state)  # noqa: SLF001 - intentionally testing the node directly
+
+    assert "**" not in result["final_response"]
+    assert result["final_response"] == "Go to Settings -> Developer -> API Keys."
+
+
 def test_plan_call_never_duplicates_the_current_user_message(recording_orchestrator, conv_store):
     """Regression test for a real bug found via live testing against a real
     model: the current turn's message was appearing twice in the planner's

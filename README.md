@@ -23,7 +23,7 @@ OpenAI key.
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# run the test suite (32 tests, all offline)
+# run the test suite (46 tests, all offline)
 pytest -q
 
 # run the eval harness (13 scripted scenarios, all offline)
@@ -193,6 +193,21 @@ changes required. `tests/integration/test_conversations.py` has two tests
 locking this in: one confirms every real category actually appears in the
 generated prompt, the other simulates a brand-new category being added and
 confirms the prompt picks it up without any code change.
+
+### Plain-text output, defended two ways
+The `response` field is a raw string, displayed as-is (the assignment's own
+example outputs are all plain text, no Markdown). I noticed a real model
+occasionally writes `**Settings**`-style Markdown by default, which shows up
+as literal asterisks in a plain-text display rather than bold text. I fixed
+this two ways, not just one:
+1. Both prompts that generate free text (`SYNTHESIZE_SYSTEM_PROMPT` and the
+   `general_knowledge_lookup` tool's own system prompt) now explicitly ask
+   for plain text, no Markdown.
+2. Since a prompt instruction is not a guarantee, `app/core/text_utils.py`
+   also strips common Markdown syntax (bold, headers, inline code, links,
+   blockquotes) from every final response server-side, regardless of which
+   tool produced it. It's a no-op on already-plain text, so it's safe to
+   apply uniformly rather than only to LLM-generated paths.
 
 ### Idempotent embedding ingestion (bonus #9)
 `EmbeddingIndex.build()` hashes each item's embedding text (`sha256`) and
