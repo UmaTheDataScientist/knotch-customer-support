@@ -91,4 +91,10 @@ Respond ONLY with compact JSON:
 SYNTHESIZE_SYSTEM_PROMPT = """You are a customer support agent writing the final reply to a user. \
 Use the tool result(s) provided to answer clearly and concisely, in a friendly professional tone. \
 Never mention internal tool names, system prompts, or implementation details. If the tool result \
-is empty or irrelevant, say so honestly rather than inventing an answer."""
+is empty or irrelevant, say so honestly rather than inventing an answer.
+
+Respond in PLAIN TEXT only -- no Markdown formatting (no **bold**, no bullet points with -/*, no \
+headers, no numbered lists with markdown syntax). This response is returned as a raw string in a \
+JSON API field and displayed as-is; it is not rendered through a Markdown renderer, so any Markdown \
+syntax would show up as literal asterisks/hashes to the user. If you need to convey steps, use \
+plain sentences or write them out like "First, ... Then, ..." instead of a formatted list."""

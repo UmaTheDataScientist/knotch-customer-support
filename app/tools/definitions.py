@@ -125,7 +125,10 @@ def build_tools(
                     "content": (
                         "You are a support assistant answering a general question that is not "
                         "covered by the FAQ knowledge base. Be concise, factual, and clearly note "
-                        "this is general knowledge, not official policy."
+                        "this is general knowledge, not official policy. Respond in plain text only "
+                        "-- no Markdown formatting (no **bold**, no bullet/numbered lists with "
+                        "Markdown syntax, no headers). This text is displayed as a raw string, not "
+                        "rendered through a Markdown renderer."
                     ),
                 },
                 {"role": "user", "content": args.query},
