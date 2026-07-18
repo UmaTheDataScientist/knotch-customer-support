@@ -119,8 +119,19 @@ class SupportAgentGraph:
                 trace.detail["forced"] = True
             else:
                 messages = [{"role": "system", "content": PLAN_SYSTEM_PROMPT}]
+                if self._conv.pending_clarification:
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Note: your previous turn asked the user a clarifying question. "
+                                "The user's latest message below is their answer to it -- resolve "
+                                "the earlier ambiguity using this reply, do not ask again unless "
+                                "the reply is itself still unclear."
+                            ),
+                        }
+                    )
                 messages.extend(state["context_messages"])
-                messages.append({"role": "user", "content": state["user_message"]})
                 result = self._llm.chat(messages, json_mode=True, temperature=0.1)
                 plan = self._safe_json(result.content)
                 plan.setdefault("tool", "ask_user_clarification")

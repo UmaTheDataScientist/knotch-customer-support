@@ -95,3 +95,27 @@ def test_trace_is_recorded_for_a_conversation(orchestrator, conv_store):
     assert "verify" in step_types
     assert "final_response" in step_types
     assert trace.total_latency_ms() >= 0
+
+
+def test_plan_call_never_duplicates_the_current_user_message(recording_orchestrator, conv_store):
+    """Regression test for a real bug found via live testing against a real
+    model: the current turn's message was appearing twice in the planner's
+    message list (once via context_messages(), once via an explicit
+    duplicate append), which caused a real model to misread a clear
+    follow-up answer as "the user is vaguely repeating themselves." The
+    offline FakeLLMClient couldn't catch this because it only inspects the
+    last user message, not the full message shape -- this test inspects
+    the actual messages list instead."""
+    conv = conv_store.get_or_create("dup-check-1")
+    recording_orchestrator.handle_message(conv, "x")
+    recording_orchestrator.handle_message(conv, "i forgot my password")
+
+    plan_calls = recording_orchestrator._llm.plan_calls()
+    assert len(plan_calls) >= 2, "expected at least one plan call per turn"
+
+    second_call = plan_calls[-1]
+    user_contents = [m["content"] for m in second_call if m["role"] == "user"]
+    assert user_contents.count("i forgot my password") == 1, (
+        f"the current user message appeared {user_contents.count('i forgot my password')} times "
+        f"in the planner's message list, expected exactly 1: {user_contents}"
+    )
