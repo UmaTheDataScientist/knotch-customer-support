@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Support Agent — Dev Console</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e8ec;
+    --text-dim: #8b93a3;
+    --accent: #5b8cff;
+    --faq: #4caf78;
+    --compliance: #e0555f;
+    --agent: #d3a54c;
+    --escalation: #b06ee0;
+    --general: #4cb8d3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+  }
+  #chatPane {
+    flex: 1.3;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+  }
+  #tracePane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+  }
+  header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+  }
+  header h1 {
+    font-size: 15px;
+    margin: 0;
+    font-weight: 600;
+    flex: 1;
+  }
+  header input {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    width: 140px;
+  }
+  button.small {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button.small:hover { border-color: var(--accent); }
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg { max-width: 78%; padding: 10px 13px; border-radius: 12px; font-size: 14px; line-height: 1.45; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: white; border-bottom-right-radius: 3px; }
+  .msg.bot { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+  .badge.source-faq { background: var(--faq); color: #06210f; }
+  .badge.source-compliance { background: var(--compliance); color: #2a0508; }
+  .badge.source-agent { background: var(--agent); color: #2a1e05; }
+  .badge.source-escalation { background: var(--escalation); color: #1c0a2a; }
+  .badge.source-general_knowledge { background: var(--general); color: #05242a; }
+  .badge.tool { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+  .badge.verified-true { background: #1f3a2a; color: #6fdb9a; border: 1px solid #2f5c3f; }
+  .badge.verified-false { background: #3a1f1f; color: #db6f6f; border: 1px solid #5c2f2f; }
+  #inputBar { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--border); background: var(--panel); }
+  #inputBar input {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 11px 14px; border-radius: 10px; font-size: 14px; outline: none;
+  }
+  #inputBar input:focus { border-color: var(--accent); }
+  #inputBar button {
+    background: var(--accent); border: none; color: white; padding: 0 20px; border-radius: 10px;
+    cursor: pointer; font-size: 14px; font-weight: 600;
+  }
+  #inputBar button:disabled { opacity: .5; cursor: default; }
+  #traceHeader { padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  #traceHeader h2 { font-size: 13px; margin: 0 0 4px 0; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+  #traceMeta { font-size: 12px; color: var(--text-dim); }
+  #traceSteps { flex: 1; overflow-y: auto; padding: 14px 18px; }
+  .step {
+    border-left: 2px solid var(--border);
+    padding: 4px 0 14px 16px;
+    margin-left: 4px;
+    position: relative;
+  }
+  .step::before {
+    content: '';
+    position: absolute;
+    left: -5px; top: 4px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .step .step-type { font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
+  .step .step-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .step pre {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: #b8c4d9;
+    margin-top: 6px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 180px;
+  }
+  .empty-state { color: var(--text-dim); font-size: 13px; padding: 20px; text-align: center; }
+  #configBar { padding: 8px 18px; font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border); }
+  #configBar input { background: transparent; border: none; color: var(--text-dim); font-size: 11px; width: 220px; }
+</style>
+</head>
+<body>
+
+<div id="chatPane">
+  <header>
+    <h1>Support Agent — Dev Console</h1>
+    <input id="convId" readonly>
+    <button class="small" onclick="newConversation()">New conversation</button>
+  </header>
+  <div id="messages"></div>
+  <div id="inputBar">
+    <input id="msgInput" placeholder="Try: how do I reset my password? / x / is the site down? / write me a poem" onkeydown="if(event.key==='Enter') send()">
+    <button id="sendBtn" onclick="send()">Send</button>
+  </div>
+  <div id="configBar">
+    API base: <input id="apiBase" value="http://127.0.0.1:8000" onchange="saveConfig()">
+  </div>
+</div>
+
+<div id="tracePane">
+  <div id="traceHeader">
+    <h2>Live Trace</h2>
+    <div id="traceMeta">Send a message to see the plan → act → observe → verify steps.</div>
+  </div>
+  <div id="traceSteps"><div class="empty-state">No trace yet.</div></div>
+</div>
+
+<script>
+let convId = null;
+const $ = (id) => document.getElementById(id);
+
+function apiBase() { return $('apiBase').value.replace(/\/$/, ''); }
+function saveConfig() { localStorage.setItem('apiBase', $('apiBase').value); }
+
+function newConversation() {
+  convId = 'dev-' + Math.random().toString(36).slice(2, 10);
+  $('convId').value = convId;
+  $('messages').innerHTML = '';
+  $('traceSteps').innerHTML = '<div class="empty-state">No trace yet.</div>';
+  $('traceMeta').textContent = 'Send a message to see the plan → act → observe → verify steps.';
+}
+
+function addMessage(text, who, meta) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + who;
+  wrap.textContent = text;
+  if (meta) {
+    const badges = document.createElement('div');
+    badges.className = 'badges';
+    if (meta.source) {
+      const b = document.createElement('span');
+      b.className = 'badge source-' + meta.source;
+      b.textContent = meta.source;
+      badges.appendChild(b);
+    }
+    if (typeof meta.verified === 'boolean') {
+      const b = document.createElement('span');
+      b.className = 'badge verified-' + meta.verified;
+      b.textContent = meta.verified ? 'verified' : 'unverified';
+      badges.appendChild(b);
+    }
+    (meta.tools_used || []).forEach(t => {
+      const b = document.createElement('span');
+      b.className = 'badge tool';
+      b.textContent = t;
+      badges.appendChild(b);
+    });
+    if (meta.iterations) {
+      const b = document.createElement('span');
+      b.className = 'badge tool';
+      b.textContent = meta.iterations + ' iter';
+      badges.appendChild(b);
+    }
+    wrap.appendChild(badges);
+  }
+  $('messages').appendChild(wrap);
+  $('messages').scrollTop = $('messages').scrollHeight;
+}
+
+async function send() {
+  const input = $('msgInput');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!convId) newConversation();
+
+  addMessage(text, 'user');
+  input.value = '';
+  $('sendBtn').disabled = true;
+
+  try {
+    const resp = await fetch(`${apiBase()}/conversations/${convId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      addMessage(`[HTTP ${resp.status}] ${err}`, 'bot', null);
+      return;
+    }
+    const data = await resp.json();
+    addMessage(data.response, 'bot', data);
+    await loadTrace();
+  } catch (e) {
+    addMessage(`Request failed: ${e.message}. Is the server running at ${apiBase()}?`, 'bot', null);
+  } finally {
+    $('sendBtn').disabled = false;
+  }
+}
+
+async function loadTrace() {
+  try {
+    const resp = await fetch(`${apiBase()}/conversations/${convId}/trace`);
+    if (!resp.ok) return;
+    const trace = await resp.json();
+    renderTrace(trace);
+  } catch (e) { /* server not reachable; chat already reported it */ }
+}
+
+function renderTrace(trace) {
+  $('traceMeta').textContent =
+    `${trace.steps.length} steps · ${trace.total_tokens} tokens · $${trace.total_cost_usd.toFixed(6)} · ${trace.total_latency_ms ? '' : ''}`;
+
+  const totalLatency = trace.steps.reduce((s, step) => s + (step.latency_ms || 0), 0);
+  $('traceMeta').textContent += ` · ${totalLatency.toFixed(0)}ms total`;
+
+  const container = $('traceSteps');
+  container.innerHTML = '';
+  if (!trace.steps.length) {
+    container.innerHTML = '<div class="empty-state">No trace yet.</div>';
+    return;
+  }
+  trace.steps.forEach(step => {
+    const el = document.createElement('div');
+    el.className = 'step';
+    const tokenInfo = (step.prompt_tokens || step.completion_tokens)
+      ? ` · ${step.prompt_tokens}+${step.completion_tokens} tok · $${step.estimated_cost_usd.toFixed(6)}`
+      : '';
+    el.innerHTML = `
+      <div class="step-type">${step.step_type}</div>
+      <div class="step-meta">${step.latency_ms.toFixed(1)}ms${tokenInfo}</div>
+      <pre>${escapeHtml(JSON.stringify(step.detail, null, 2))}</pre>
+    `;
+    container.appendChild(el);
+  });
+  container.scrollTop = container.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+// init
+const savedBase = localStorage.getItem('apiBase');
+if (savedBase) $('apiBase').value = savedBase;
+newConversation();
+</script>
+
+</body>
+</html>

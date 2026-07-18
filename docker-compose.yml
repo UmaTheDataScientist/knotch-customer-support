@@ -1,0 +1,12 @@
+services:
+  support-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-fake}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_CHAT_MODEL=${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-small}
+    volumes:
+      - ./data:/app/data

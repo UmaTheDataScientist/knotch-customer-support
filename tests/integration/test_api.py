@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from app.core.dependencies import get_conversation_store, get_orchestrator
+from app.main import app
+
+
+def _override_deps(app_, orchestrator, conv_store):
+    app_.dependency_overrides[get_orchestrator] = lambda: orchestrator
+    app_.dependency_overrides[get_conversation_store] = lambda: conv_store
+
+
+def test_post_message_and_get_trace(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/conversations/api-test-1/messages",
+        json={"message": "How do I restore my account to its default settings?"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["conversation_id"] == "api-test-1"
+    assert body["source"] == "faq"
+
+    trace_resp = client.get("/conversations/api-test-1/trace")
+    assert trace_resp.status_code == 200
+    trace_body = trace_resp.json()
+    assert trace_body["conversation_id"] == "api-test-1"
+    assert len(trace_body["steps"]) > 0
+
+    app.dependency_overrides.clear()
+
+
+def test_get_trace_for_unknown_conversation_is_404(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    resp = client.get("/conversations/does-not-exist/trace")
+    assert resp.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+def test_empty_message_is_rejected(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    resp = client.post("/conversations/api-test-2/messages", json={"message": ""})
+    assert resp.status_code == 422  # pydantic min_length validation
+
+    app.dependency_overrides.clear()
+
+
+def test_health_check():
+    client = TestClient(app)
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
