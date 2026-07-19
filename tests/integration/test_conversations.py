@@ -108,6 +108,58 @@ def test_multi_intent_handles_more_than_two_requests(orchestrator, conv_store):
     assert "invoice" in out.response.lower()
 
 
+def test_independent_sub_requests_run_in_parallel_not_sequentially(orchestrator, conv_store):
+    """Bonus: parallel tool execution. Proves genuine concurrency, not just
+    that a ThreadPoolExecutor is imported -- three sub-requests, each
+    artificially delayed, are timed together. If they ran sequentially this
+    would take >= 3x the delay; run in parallel it should take close to 1x."""
+    import time
+
+    from pydantic import BaseModel
+
+    from app.agents.graph import SupportAgentGraph
+    from app.tools.definitions import Tool, ToolResult
+
+    DELAY_SECONDS = 0.3
+
+    class _SlowArgs(BaseModel):
+        query: str
+
+    def _slow_run(args: _SlowArgs) -> ToolResult:
+        time.sleep(DELAY_SECONDS)
+        return ToolResult(tool_name="general_knowledge_lookup", output={"answer": f"answer for {args.query}"})
+
+    slow_tools = dict(orchestrator._tools)
+    slow_tools["general_knowledge_lookup"] = Tool(
+        name="general_knowledge_lookup",
+        description="artificially slow stand-in for timing this test",
+        args_schema=_SlowArgs,
+        func=_slow_run,
+    )
+
+    conv = conv_store.get_or_create("parallel-check-1")
+    graph = SupportAgentGraph(
+        orchestrator._llm, slow_tools, orchestrator._settings, conv, orchestrator._faq_categories
+    )
+    state = {
+        "user_message": "irrelevant for this test",
+        "sub_plans": [
+            {"tool": "general_knowledge_lookup", "tool_args": {"query": f"q{i}"}, "reasoning": "test"}
+            for i in range(3)
+        ],
+    }
+
+    start = time.perf_counter()
+    result_state = graph._act_node(state)  # noqa: SLF001 - intentionally testing the node directly
+    elapsed = time.perf_counter() - start
+
+    assert len(result_state["sub_results"]) == 3
+    assert elapsed < DELAY_SECONDS * 2, (
+        f"expected ~{DELAY_SECONDS}s if parallel, took {elapsed:.2f}s -- looks sequential "
+        f"(3 sequential calls would take >= {DELAY_SECONDS * 3:.2f}s)"
+    )
+
+
 def test_multi_intent_ambiguous_subrequest_short_circuits_whole_turn(orchestrator, conv_store):
     """If any sub-request resolves to a direct-response tool (clarification,
     refusal, escalation), that one should take over the whole turn rather

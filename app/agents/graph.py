@@ -24,6 +24,7 @@ whichever tool call happened to retrieve.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -181,48 +182,74 @@ class SupportAgentGraph:
 
     def _act_node(self, state: AgentState) -> AgentState:
         sub_plans = state["sub_plans"]
-        sub_results: list[dict[str, Any]] = []
-        short_circuit_tool: Optional[str] = None
-        tools_used: list[str] = []
 
-        with self._conv.tracer.step(TraceStepType.TOOL_CALL, sub_request_count=len(sub_plans)) as trace:
-            call_details = []
-            for sub_plan in sub_plans:
-                tool_name = sub_plan.get("tool", "ask_user_clarification")
-                tool = self._tools.get(tool_name) or self._tools["ask_user_clarification"]
-                args = dict(sub_plan.get("tool_args") or {})
+        # Decide short-circuit from the PLANNED tool names, before running
+        # anything. This preserves the old cost-saving behavior (never
+        # execute sub-requests after a clarification/refuse/escalation) while
+        # still letting the common case -- every sub-request is a normal,
+        # independent lookup tool -- run concurrently below.
+        short_circuit_index = next(
+            (i for i, sp in enumerate(sub_plans) if sp.get("tool") in _DIRECT_RESPONSE_TOOLS), None
+        )
+        plans_to_run = [sub_plans[short_circuit_index]] if short_circuit_index is not None else sub_plans
+        run_in_parallel = len(plans_to_run) > 1
 
-                try:
-                    if tool.name == "ask_user_clarification" and "question" not in args:
-                        args["question"] = "Could you share a bit more detail about what you're trying to do?"
-                    if tool.name == "escalate_to_human":
-                        args.setdefault("transcript", state["user_message"])
-                        args.setdefault("reason", sub_plan.get("reasoning", "Escalated by planner."))
-                    if tool.name == "refuse" and "reason" not in args:
-                        args["reason"] = sub_plan.get("reasoning", "Policy refusal.")
-                    result = tool.run(**args)
-                    error = None
-                except Exception as exc:  # noqa: BLE001 - tool failures must not crash the graph
-                    error = str(exc)
-                    result = tool.run(**self._fallback_args(tool.name, state["user_message"]))
+        with self._conv.tracer.step(
+            TraceStepType.TOOL_CALL, sub_request_count=len(plans_to_run), parallel=run_in_parallel
+        ) as trace:
+            if run_in_parallel:
+                # Bonus: parallel tool execution -- independent lookups (e.g.
+                # two separate search_faq calls for a multi-intent message)
+                # don't depend on each other's output, so run them
+                # concurrently instead of paying their latency serially.
+                # Threads, not asyncio, since Tool.run() and LLMClient are
+                # synchronous; real network calls (embeddings, chat
+                # completions) release the GIL while waiting on I/O, so this
+                # still gives genuine wall-clock speedup.
+                max_workers = min(len(plans_to_run), 8)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # executor.map preserves input order in its results,
+                    # regardless of which thread finishes first.
+                    call_results = list(
+                        executor.map(lambda sp: self._execute_sub_plan(sp, state["user_message"]), plans_to_run)
+                    )
+            else:
+                call_results = [self._execute_sub_plan(sp, state["user_message"]) for sp in plans_to_run]
 
-                call_details.append({"tool": tool.name, "args": args, "output": result.output, "error": error})
-                sub_results.append({"tool_name": tool.name, "tool_output": result.output})
-                tools_used.append(tool.name)
-
-                if tool.name in _DIRECT_RESPONSE_TOOLS and short_circuit_tool is None:
-                    short_circuit_tool = tool.name
-                    # Stop executing further sub-requests once a direct-response
-                    # tool fires -- see module docstring for why a clarification
-                    # question, refusal, or escalation should never be blended
-                    # with an unrelated answer in the same reply.
-                    break
+            call_details = [r[2] for r in call_results]
+            sub_results = [{"tool_name": r[0], "tool_output": r[1]} for r in call_results]
+            tools_used = [r[0] for r in call_results]
             trace.detail["sub_calls"] = call_details
 
         state["sub_results"] = sub_results
-        state["short_circuit_tool"] = short_circuit_tool
+        state["short_circuit_tool"] = sub_results[0]["tool_name"] if short_circuit_index is not None else None
         state["tools_used"] = state.get("tools_used", []) + tools_used
         return state
+
+    def _execute_sub_plan(self, sub_plan: dict[str, Any], user_message: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """Runs a single sub-request's tool call. Pulled out of _act_node so
+        it can be called either sequentially or from a thread pool without
+        duplicating the argument-defaulting and error-fallback logic."""
+        tool_name = sub_plan.get("tool", "ask_user_clarification")
+        tool = self._tools.get(tool_name) or self._tools["ask_user_clarification"]
+        args = dict(sub_plan.get("tool_args") or {})
+
+        try:
+            if tool.name == "ask_user_clarification" and "question" not in args:
+                args["question"] = "Could you share a bit more detail about what you're trying to do?"
+            if tool.name == "escalate_to_human":
+                args.setdefault("transcript", user_message)
+                args.setdefault("reason", sub_plan.get("reasoning", "Escalated by planner."))
+            if tool.name == "refuse" and "reason" not in args:
+                args["reason"] = sub_plan.get("reasoning", "Policy refusal.")
+            result = tool.run(**args)
+            error = None
+        except Exception as exc:  # noqa: BLE001 - tool failures must not crash the graph
+            error = str(exc)
+            result = tool.run(**self._fallback_args(tool.name, user_message))
+
+        detail = {"tool": tool.name, "args": args, "output": result.output, "error": error}
+        return tool.name, result.output, detail
 
     def _observe_node(self, state: AgentState) -> AgentState:
         sub_results = state["sub_results"]
