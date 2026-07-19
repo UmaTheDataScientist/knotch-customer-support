@@ -31,6 +31,47 @@ docker compose up --build
 
 Don't have Docker? See "Manual setup" below for the plain Python path.
 
+## Manual setup (no Docker)
+
+Requires Python 3.11 or newer installed.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# run the test suite (46 tests, all offline)
+pytest -q
+
+# run the eval harness (13 scenarios, all offline)
+python eval/run_eval.py
+
+# start the API
+uvicorn app.main:app --reload --port 8000
+```
+
+Example request:
+```bash
+curl -X POST http://127.0.0.1:8000/conversations/abc-123/messages \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How do I reset my password?"}'
+```
+
+To use a real OpenAI (or Anthropic) key instead of the offline default, copy
+`.env.example` to `.env` and fill in `LLM_PROVIDER` plus your API key.
+
+To also run the frontend manually, in a second terminal alongside the API
+above:
+```bash
+cd devtools
+python -m http.server 5500
+```
+Then open `http://127.0.0.1:5500/chat_ui.html`. It's a simple two-panel chat
+interface: plain chat on the left, a live trace of each plan/act/observe/
+verify step on the right. If nothing happens when you send a message, check
+the "API base" field at the bottom of the page matches the port your server
+is running on.
+
 **Start here as a reviewer:**
 - `app/agents/graph.py`, the Plan → Act → Observe → Verify loop as a LangGraph
   state machine (the core of the system).
@@ -76,47 +117,6 @@ base is embedded and cached (`app/retrieval/`), so re-running ingestion only
 re-embeds rows that actually changed. Conversation history is kept in memory
 per `conversation_id`, with older turns compressed into a running summary
 instead of growing the context forever.
-
-## Manual setup (no Docker)
-
-Requires Python 3.11 or newer installed.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-# run the test suite (46 tests, all offline)
-pytest -q
-
-# run the eval harness (13 scenarios, all offline)
-python eval/run_eval.py
-
-# start the API
-uvicorn app.main:app --reload --port 8000
-```
-
-Example request:
-```bash
-curl -X POST http://127.0.0.1:8000/conversations/abc-123/messages \
-  -H "Content-Type: application/json" \
-  -d '{"message": "How do I reset my password?"}'
-```
-
-To use a real OpenAI (or Anthropic) key instead of the offline default, copy
-`.env.example` to `.env` and fill in `LLM_PROVIDER` plus your API key.
-
-To also run the frontend manually, in a second terminal alongside the API
-above:
-```bash
-cd devtools
-python -m http.server 5500
-```
-Then open `http://127.0.0.1:5500/chat_ui.html`. It's a simple two-panel chat
-interface: plain chat on the left, a live trace of each plan/act/observe/
-verify step on the right. If nothing happens when you send a message, check
-the "API base" field at the bottom of the page matches the port your server
-is running on.
 
 ## Extras beyond what the assignment asked for
 
