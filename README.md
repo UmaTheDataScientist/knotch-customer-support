@@ -155,6 +155,13 @@ instead of growing the context forever.
 - **Docker Compose covers the whole system**, not just the API. A second
   service serves the frontend too, so `docker compose up` is a single command
   for both.
+- **A precondition-mismatch check on retrieved FAQ content.** The provided
+  dataset's only password-reset entry says "enter your current password,"
+  which doesn't fit someone who says they forgot it, and there's no separate
+  account-recovery entry in the data at all. Rather than handing over steps
+  the user has already said they can't perform, synthesis and verification
+  both check for this kind of mismatch and redirect to support instead of
+  presenting a bad-fit answer as if it were correct.
 
 ## How I'd evaluate this in production
 

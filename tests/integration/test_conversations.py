@@ -60,6 +60,24 @@ def test_security_incident_triggers_escalation(orchestrator, conv_store):
     assert "escalate_to_human" in out.tools_used
 
 
+def test_forgotten_password_gets_a_recovery_caveat_not_the_change_password_steps(orchestrator, conv_store):
+    """Real content gap found in the assignment's own FAQ dataset: the KB's
+    only password-reset entry says "enter your current password," which
+    directly contradicts a user who says they forgot it. There's no
+    dedicated forgot-password/account-recovery FAQ entry in the provided
+    data at all. Rather than silently handing over steps the user has
+    already said they can't perform, the synthesis step should notice the
+    mismatch and point to support instead."""
+    conv = conv_store.get_or_create("forgot-password-1")
+    # NOTE: phrased for lexical overlap with the KB entry, same reasoning as
+    # test_example_1 above -- the offline fake embedder is a deterministic
+    # hash-based stand-in, not real semantic search.
+    out = orchestrator.handle_message(conv, "I forgot my password, what steps do I take to reset it?")
+
+    assert "select 'change password'" not in out.response.lower()
+    assert "support" in out.response.lower()
+
+
 def test_status_question_routes_to_check_system_status_not_static_faq(orchestrator, conv_store):
     conv = conv_store.get_or_create("status-1")
     out = orchestrator.handle_message(conv, "is the site down right now?")

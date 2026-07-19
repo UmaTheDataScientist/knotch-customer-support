@@ -297,8 +297,20 @@ class FakeLLMClient(LLMClient):
             except (json.JSONDecodeError, TypeError):
                 payload = {}
             matches = payload.get("kb_matches") or []
+            question = (payload.get("user_question") or "").lower()
             if matches:
-                return matches[0].get("answer", "Here's what I found in our help center.")
+                top_answer = matches[0].get("answer", "")
+                # Simulate the precondition-mismatch check: an answer that
+                # requires the current password doesn't fit someone who
+                # says they forgot it.
+                if "forgot" in question and "current password" in top_answer.lower():
+                    return (
+                        "It looks like the steps we have on file for changing your password require "
+                        "entering your current password first, which won't work if you've forgotten it. "
+                        "Since I don't have a dedicated account-recovery process in the FAQ for this, "
+                        "I'd recommend reaching out to support directly so they can help you regain access."
+                    )
+                return top_answer
             return "I couldn't find a specific match, but here's some general guidance."
 
         if "general question that is not" in system:
