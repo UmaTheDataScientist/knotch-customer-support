@@ -8,6 +8,7 @@ from app.core.state import ConversationStore
 from app.models.schemas import (
     ChatMessageIn,
     ChatMessageOut,
+    ConversationCreateOut,
     ConversationHistoryOut,
     ConversationListOut,
     ConversationSummaryOut,
@@ -17,6 +18,18 @@ from app.models.schemas import (
 )
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+
+@router.post("", response_model=ConversationCreateOut)
+async def create_conversation(
+    store: ConversationStore = Depends(get_conversation_store),
+) -> ConversationCreateOut:
+    """Creates a new conversation with a server-generated, guaranteed-unique
+    id. Use this when starting a fresh conversation; use
+    POST /{conversation_id}/messages directly (with your own chosen id) only
+    when you specifically want to resume or address a known id."""
+    conv = store.create()
+    return ConversationCreateOut(conversation_id=conv.conversation_id)
 
 
 @router.get("", response_model=ConversationListOut)

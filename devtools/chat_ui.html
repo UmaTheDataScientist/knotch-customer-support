@@ -139,8 +139,20 @@ const $ = (id) => document.getElementById(id);
 function apiBase() { return $('apiBase').value.replace(/\/$/, ''); }
 function saveConfig() { localStorage.setItem('apiBase', $('apiBase').value); }
 
-function newConversation() {
-  convId = 'dev-' + Math.random().toString(36).slice(2, 10);
+async function newConversation() {
+  try {
+    const resp = await fetch(`${apiBase()}/conversations`, { method: 'POST' });
+    if (resp.ok) {
+      const data = await resp.json();
+      convId = data.conversation_id;
+    } else {
+      // Server unreachable or errored -- fall back to a client-side id so
+      // the UI still works, but this is a degraded path, not the norm.
+      convId = 'dev-' + Math.random().toString(36).slice(2, 10);
+    }
+  } catch (e) {
+    convId = 'dev-' + Math.random().toString(36).slice(2, 10);
+  }
   $('convId').value = convId;
   $('messages').innerHTML = '';
   $('traceSteps').innerHTML = '<div class="empty-state">No trace yet.</div>';
@@ -222,7 +234,7 @@ async function send() {
   const input = $('msgInput');
   const text = input.value.trim();
   if (!text) return;
-  if (!convId) newConversation();
+  if (!convId) await newConversation();
 
   addMessage(text, 'user');
   input.value = '';

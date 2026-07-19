@@ -249,11 +249,17 @@ worth building along the way:
   each message. Not part of the graded API itself, built so the agent's
   reasoning could be watched happen in real time instead of reading raw trace
   JSON in a terminal.
-- **`GET /conversations` and `GET /conversations/{id}/messages`** -- list
-  every conversation currently in memory (with a preview) and fetch a
-  conversation's full message history, not just its trace. Backs the
-  dev UI's Browse/Load buttons; without these there was no way to discover
-  or resume an existing conversation by id.
+- **`POST /conversations`, `GET /conversations`, and `GET /conversations/{id}/messages`**
+  -- create a new conversation with a server-guaranteed-unique id, list every
+  conversation currently in memory (with a preview), and fetch a
+  conversation's full message history, not just its trace. The create
+  endpoint matters more than it sounds: the dev UI originally generated its
+  own conversation ids client-side with `Math.random()`, which has no real
+  uniqueness guarantee -- a real client shouldn't be trusted to generate
+  collision-free ids, the server should. `GET /conversations` and
+  `GET /conversations/{id}/messages` back the dev UI's Browse/Load buttons;
+  without them there was no way to discover or resume an existing
+  conversation by id.
 - **Two small diagnostic scripts** in `scripts/`. One confirms a real API key
   works with exactly 2 calls, the other inspects what actually got loaded from
   `.env` without ever printing the secret.

@@ -9,6 +9,7 @@ not on every single message.
 from __future__ import annotations
 
 import threading
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -89,6 +90,20 @@ class ConversationStore:
             if conversation_id not in self._states:
                 self._states[conversation_id] = ConversationState(conversation_id=conversation_id)
             return self._states[conversation_id]
+
+    def create(self) -> ConversationState:
+        """Generates a fresh, server-guaranteed-unique conversation id,
+        rather than trusting a caller to supply a collision-free one
+        (get_or_create is fine when the caller genuinely wants to resume a
+        specific known id, but a client picking its own id for a *new*
+        conversation -- e.g. Math.random() in a browser -- has no real
+        uniqueness guarantee)."""
+        with self._lock:
+            while True:
+                candidate = uuid.uuid4().hex[:12]
+                if candidate not in self._states:
+                    self._states[candidate] = ConversationState(conversation_id=candidate)
+                    return self._states[candidate]
 
     def get(self, conversation_id: str) -> Optional[ConversationState]:
         return self._states.get(conversation_id)

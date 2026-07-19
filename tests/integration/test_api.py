@@ -89,6 +89,32 @@ def test_get_messages_for_unknown_conversation_is_404(orchestrator, conv_store):
     app.dependency_overrides.clear()
 
 
+def test_create_conversation_returns_a_fresh_id(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    resp = client.post("/conversations")
+    assert resp.status_code == 200
+    conv_id = resp.json()["conversation_id"]
+    assert conv_id
+
+    # The id should actually exist in the store, ready to receive a message,
+    # not just be a string handed back with nothing behind it.
+    assert conv_store.get(conv_id) is not None
+
+    app.dependency_overrides.clear()
+
+
+def test_create_conversation_ids_are_unique_across_calls(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    ids = {client.post("/conversations").json()["conversation_id"] for _ in range(20)}
+    assert len(ids) == 20  # no collisions across 20 real calls
+
+    app.dependency_overrides.clear()
+
+
 def test_list_conversations_is_empty_initially(orchestrator, conv_store):
     _override_deps(app, orchestrator, conv_store)
     client = TestClient(app)
