@@ -4,6 +4,32 @@ A customer support app that handles multi-turn conversations, figures out which
 tool to use for each request, and checks its own answers before replying. Built
 with FastAPI and LangGraph.
 
+## Quick start (any laptop, Docker only)
+
+```bash
+git clone https://github.com/UmaTheDataScientist/knotch-customer-support.git
+cd knotch-customer-support
+docker compose up --build
+```
+
+- API: `http://127.0.0.1:8000`
+- Frontend: `http://127.0.0.1:5500/chat_ui.html`
+
+That's it — no Python install, no virtual environment, works the same on
+Mac/Windows/Linux as long as Docker Desktop is installed. Runs in an offline
+mode by default (`LLM_PROVIDER=fake`), so there's nothing else to configure to
+try it out.
+
+To use a real OpenAI (or Anthropic) key instead, export these before running
+the command above:
+```bash
+export LLM_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+docker compose up --build
+```
+
+Don't have Docker? See "Manual setup" below for the plain Python path.
+
 **Start here as a reviewer:**
 - `app/agents/graph.py` — the Plan → Act → Observe → Verify loop as a LangGraph
   state machine (the core of the system).
@@ -13,36 +39,6 @@ with FastAPI and LangGraph.
   interactions from the assignment doc, plus a few regression tests for real
   bugs found by testing against a live model (not just the offline suite).
 - `eval/run_eval.py` — automated eval harness, 13 scenarios, 100% pass rate.
-
-## How to run it
-
-No API key needed to try it out — it defaults to an offline mode for
-development and testing.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-# run the test suite (46 tests, all offline)
-pytest -q
-
-# run the eval harness (13 scenarios, all offline)
-python eval/run_eval.py
-
-# start the API
-uvicorn app.main:app --reload --port 8000
-```
-
-Example request:
-```bash
-curl -X POST http://127.0.0.1:8000/conversations/abc-123/messages \
-  -H "Content-Type: application/json" \
-  -d '{"message": "How do I reset my password?"}'
-```
-
-To use a real OpenAI (or Anthropic) key instead of the offline default, copy
-`.env.example` to `.env` and fill in `LLM_PROVIDER` + your API key.
 
 ## Architecture
 
@@ -80,6 +76,45 @@ re-embeds rows that actually changed. Conversation history is kept in memory
 per `conversation_id`, with older turns compressed into a running summary
 instead of growing the context forever.
 
+## Manual setup (no Docker)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# run the test suite (46 tests, all offline)
+pytest -q
+
+# run the eval harness (13 scenarios, all offline)
+python eval/run_eval.py
+
+# start the API
+uvicorn app.main:app --reload --port 8000
+```
+
+Example request:
+```bash
+curl -X POST http://127.0.0.1:8000/conversations/abc-123/messages \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How do I reset my password?"}'
+```
+
+To use a real OpenAI (or Anthropic) key instead of the offline default, copy
+`.env.example` to `.env` and fill in `LLM_PROVIDER` + your API key.
+
+**To also run the frontend manually** (a second terminal, alongside the API
+above):
+```bash
+cd devtools
+python -m http.server 5500
+```
+Then open `http://127.0.0.1:5500/chat_ui.html`. It's a simple two-panel chat
+interface — plain chat on the left, a live trace of each plan/act/observe/
+verify step on the right. If nothing happens when you send a message, check
+the "API base" field at the bottom of the page matches the port your server
+is running on.
+
 ## Extras beyond what the assignment asked for
 
 - **Two extra tools** — `check_system_status` and `lookup_account_status` —
@@ -90,7 +125,7 @@ instead of growing the context forever.
   calls — this is what lets the whole test suite and eval harness run free
   and in under 2 seconds, which mattered since the real API key is
   rate-limited and rotates weekly.
-- **A local dev chat UI** (see below) with a live, step-by-step trace panel.
+- **A local dev chat UI** with a live, step-by-step trace panel (see above).
 - **Two small diagnostic scripts** in `scripts/` — one confirms a real API key
   works with exactly 2 calls, the other inspects what actually got loaded from
   `.env` without ever printing the secret.
@@ -103,51 +138,9 @@ instead of growing the context forever.
 - **The planner's FAQ category list is derived from the real knowledge base
   at runtime**, not hand-typed — so editing the KB can never make the prompt
   silently go stale.
-
-## Frontend (local dev chat UI)
-
-A simple two-panel chat interface — plain chat on the left, a live trace of
-each plan/act/observe/verify step on the right. Not part of the API itself;
-just a way to interact with it visually instead of using curl.
-
-**1. Start the API** (one terminal):
-```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-**2. Serve the UI folder** (a second terminal):
-```bash
-cd devtools
-python -m http.server 5500
-```
-
-**3. Open in your browser:**
-```
-http://127.0.0.1:5500/chat_ui.html
-```
-
-If nothing happens when you send a message, check the "API base" field at the
-bottom of the page matches the port your server is running on.
-
-## Running everything with Docker
-
-Brings up the API and the frontend together, no local Python setup needed:
-
-```bash
-docker compose up --build
-```
-
-- API: `http://127.0.0.1:8000`
-- Frontend: `http://127.0.0.1:5500/chat_ui.html`
-
-Defaults to the offline mode (`LLM_PROVIDER=fake`), same as running it
-locally. To use a real key, export the same variables `docker-compose.yml`
-already reads before running the command above:
-```bash
-export LLM_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
-docker compose up --build
-```
+- **Docker Compose covers the whole system**, not just the API — a second
+  service serves the frontend too, so `docker compose up` is a single command
+  for both.
 
 ## How I'd evaluate this in production
 
