@@ -128,7 +128,12 @@ instead of growing the context forever.
   calls. This is what lets the whole test suite and eval harness run free and
   in under 2 seconds, which mattered since the real API key is rate-limited
   and rotates weekly.
-- **A local dev chat UI** with a live, step-by-step trace panel (see above).
+- **A local dev chat UI** (`devtools/chat_ui.html`), a self-contained HTML
+  file with no build step or dependencies. A chat window on one side, a live
+  trace of every plan/act/observe/verify step on the other, updating after
+  each message. Not part of the graded API itself, built so the agent's
+  reasoning could be watched happen in real time instead of reading raw trace
+  JSON in a terminal.
 - **Two small diagnostic scripts** in `scripts/`. One confirms a real API key
   works with exactly 2 calls, the other inspects what actually got loaded from
   `.env` without ever printing the secret.
