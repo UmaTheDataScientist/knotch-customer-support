@@ -149,6 +149,11 @@ class SupportAgentGraph:
     # ------------------------------------------------------------------
     def _plan_node(self, state: AgentState) -> AgentState:
         state["iteration"] = state.get("iteration", 0) + 1
+        # Capture the previous attempt BEFORE it gets overwritten below --
+        # only present on a replan (verify failed and routed back here).
+        previous_sub_plans = state.get("sub_plans")
+        previous_failure_reason = state.get("verification_reasoning")
+
         with self._conv.tracer.step(TraceStepType.PLAN, iteration=state["iteration"]) as trace:
             if state["iteration"] > self._settings.max_agent_iterations:
                 # Failed to converge -> forced escalation rather than an infinite/失敗 loop.
@@ -175,6 +180,21 @@ class SupportAgentGraph:
                                 "The user's latest message below is their answer to it -- resolve "
                                 "the earlier ambiguity using this reply, do not ask again unless "
                                 "the reply is itself still unclear."
+                            ),
+                        }
+                    )
+                if previous_failure_reason and previous_sub_plans:
+                    tried_tools = ", ".join(sp.get("tool", "?") for sp in previous_sub_plans)
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                f"IMPORTANT: You already tried this ({tried_tools}) and it failed "
+                                f"verification for this reason: \"{previous_failure_reason}\". Do NOT "
+                                "produce the identical plan again -- that will fail the same way. Try "
+                                "a genuinely different approach: a different tool (e.g. search_faq "
+                                "instead of check_system_status, or vice versa), a reworded query, or "
+                                "escalate_to_human if nothing else plausibly resolves this."
                             ),
                         }
                     )

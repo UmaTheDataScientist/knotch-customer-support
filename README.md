@@ -279,6 +279,18 @@ worth building along the way:
   the user has already said they can't perform, synthesis and verification
   both check for this kind of mismatch and redirect to support instead of
   presenting a bad-fit answer as if it were correct.
+- **The replan loop now actually tells the planner what failed and why.**
+  Found via live testing: "why is the site slow today?" (which the KB
+  answers directly under `troubleshooting`) got routed to
+  `check_system_status` instead, whose generic "systems operational"
+  response correctly failed verification -- but the retry produced the
+  *identical* plan every time, since `verification_reasoning` was computed
+  and even logged in the trace but never fed back into the next plan
+  attempt. Six identical retries later, it force-escalated to a human for
+  something the FAQ could have answered. The plan node now includes the
+  previous attempt's tool and failure reason as explicit context on replan,
+  so a second attempt has a real chance to try something different instead
+  of repeating the same mistake until the iteration budget runs out.
 
 ## How I'd evaluate this in production
 

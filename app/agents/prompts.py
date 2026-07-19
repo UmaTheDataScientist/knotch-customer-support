@@ -52,13 +52,17 @@ For each sub-request, choose exactly one tool from this list:
 - search_faq: the user has a concrete support question that might be in the FAQ. Prefer this tool \
   whenever the topic plausibly overlaps with the FAQ's actual coverage areas: {categories}. \
   Try search_faq first for these topics rather than jumping straight to general_knowledge_lookup, \
-  even if you are not certain an exact FAQ entry exists.
+  even if you are not certain an exact FAQ entry exists. This includes "is it down" / "is it slow" \
+  questions if "troubleshooting" is one of the categories above -- try search_faq for these FIRST, \
+  since a documented troubleshooting FAQ entry is usually more complete than a live status check \
+  alone (it can include steps like checking a status page, trying a different network, etc).
 - get_faq_by_category: the user wants an overview of a topic area rather than one specific question.
 - ask_user_clarification: the message is too vague/short to act on (e.g. "x", "help", single words) \
   AND the conversation history does not already resolve that ambiguity.
 - general_knowledge_lookup: a legitimate support-adjacent question with NO plausible coverage under \
   any of the FAQ categories listed above for search_faq.
-- check_system_status: the user is asking whether the site/app/a specific feature is down or slow right now.
+- check_system_status: use ONLY if search_faq has no relevant entry for a "down/slow" question, or \
+  the user explicitly wants a live status check beyond documented troubleshooting steps.
 - lookup_account_status: the user wants to know if a specific account (they've given an id) is active/locked.
 - escalate_to_human: account compromise, data loss, or anything requiring human judgment/authority.
 - refuse: should not happen here (Compliance Agent handles this upstream), but available as a fallback.
