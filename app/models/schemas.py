@@ -69,7 +69,6 @@ class TraceStepType(str, Enum):
     COMPLIANCE_CHECK = "compliance_check"
     PLAN = "plan"
     TOOL_CALL = "tool_call"
-    TOOL_RESULT = "tool_result"
     OBSERVE = "observe"
     VERIFY = "verify"
     REPLAN = "replan"

@@ -135,6 +135,15 @@ re-embeds rows that actually changed. Conversation history is kept in memory
 per `conversation_id`, with older turns compressed into a running summary
 instead of growing the context forever.
 
+The provided FAQ dataset is intentionally messy. Two entries needed a judgment
+call, documented in `app/retrieval/knowledge_base.py`: `"x"` is excluded from
+the *searchable* index since its answer is itself an instruction to ask for
+clarification, not a fact, indexing it would make it falsely match almost any
+short query, and `ask_user_clarification` already handles that case
+dynamically. `"help!!! my account is locked"` is a real case just noisily
+formatted, so it's kept, with a normalized version used only for the
+embedding text so the formatting noise doesn't hurt retrieval.
+
 ## Extras beyond what the assignment asked for
 
 - **Two extra tools**: `check_system_status` and `lookup_account_status`,

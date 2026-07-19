@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from app.agents.compliance import ComplianceAgent
 from app.agents.graph import SupportAgentGraph
+from app.agents.prompts import PROMPT_VERSION
 from app.config import Settings
 from app.core.llm_client import LLMClient
 from app.core.state import ConversationState
@@ -40,6 +41,7 @@ class SupportOrchestrator:
                 "category": verdict.category,
                 "reasoning": verdict.reasoning,
             }
+            trace.detail["prompt_version"] = PROMPT_VERSION
             if verdict.llm_result:
                 conv.tracer.record_llm_usage(
                     trace,

@@ -29,7 +29,12 @@ from typing import Any, Optional, TypedDict
 from langgraph.graph import END, StateGraph
 
 from app.agents.compliance import ComplianceAgent
-from app.agents.prompts import SYNTHESIZE_SYSTEM_PROMPT, VERIFY_SYSTEM_PROMPT, build_plan_system_prompt
+from app.agents.prompts import (
+    PROMPT_VERSION,
+    SYNTHESIZE_SYSTEM_PROMPT,
+    VERIFY_SYSTEM_PROMPT,
+    build_plan_system_prompt,
+)
 from app.config import Settings
 from app.core.llm_client import LLMClient
 from app.core.state import ConversationState
@@ -170,6 +175,7 @@ class SupportAgentGraph:
                     trace, result.prompt_tokens, result.completion_tokens, result.estimated_cost_usd
                 )
             trace.detail["sub_plans"] = sub_plans
+            trace.detail["prompt_version"] = PROMPT_VERSION
         state["sub_plans"] = sub_plans
         return state
 
@@ -348,6 +354,7 @@ class SupportAgentGraph:
                 state["verified"] = passed
                 state["verification_reasoning"] = verdict.get("reasoning", "")
                 trace.detail["verdict"] = verdict
+                trace.detail["prompt_version"] = PROMPT_VERSION
         return state
 
     def _finalize_node(self, state: AgentState) -> AgentState:
