@@ -1,5 +1,5 @@
 services:
-  support-agent:
+  backend:
     build: .
     ports:
       - "8000:8000"
@@ -20,4 +20,4 @@ services:
       - "5500:5500"
     command: ["python", "-m", "http.server", "5500"]
     depends_on:
-      - support-agent
+      - backend
