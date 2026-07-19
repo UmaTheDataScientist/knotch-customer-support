@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
+
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.core.llm_client import LLMClient
 from app.models.schemas import MessageRole
@@ -30,10 +32,19 @@ class ConversationState:
     summary: str = ""
     pending_clarification: bool = False
     tracer: Tracer = field(default=None)  # type: ignore[assignment]
+    checkpointer: Any = field(default=None)
 
     def __post_init__(self):
         if self.tracer is None:
             self.tracer = Tracer(self.conversation_id)
+        if self.checkpointer is None:
+            # One checkpointer per conversation, reused across every turn's
+            # graph instance (a fresh SupportAgentGraph is built per message,
+            # but they all share this same checkpointer object) so LangGraph
+            # actually persists state snapshots under this conversation's
+            # thread_id, rather than each turn starting a checkpointer with
+            # no history of the previous one.
+            self.checkpointer = MemorySaver()
 
     def add_turn(self, role: MessageRole, content: str) -> None:
         self.turns.append(Turn(role=role, content=content))

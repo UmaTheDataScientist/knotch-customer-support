@@ -107,7 +107,10 @@ function with a hidden while-loop. That makes the two safety bounds (max
 iterations, max verification retries) visible and testable instead of buried
 in control flow, and every step logs its own trace entry, so a bad
 conversation can be debugged by reading `GET /conversations/{id}/trace`
-instead of guessing.
+instead of guessing. Each conversation also gets its own LangGraph
+checkpointer (`app/core/state.py`), so every node transition is a real
+persisted snapshot, inspectable via `get_state_history()`, not just an
+in-memory pass-through.
 
 The compliance check running before the main agent, not in parallel or after,
 is deliberate. It avoids wasting a planning/retrieval call on a message

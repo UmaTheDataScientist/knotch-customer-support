@@ -89,7 +89,7 @@ class SupportAgentGraph:
             {"replan": "plan_step", "finalize": "finalize_step"},
         )
         g.add_edge("finalize_step", END)
-        return g.compile()
+        return g.compile(checkpointer=self._conv.checkpointer)
 
     def run(self, user_message: str) -> AgentState:
         initial: AgentState = {
@@ -102,7 +102,17 @@ class SupportAgentGraph:
             "verification_retries": 0,
             "done": False,
         }
-        result = self._graph.invoke(initial, config={"recursion_limit": self._settings.max_agent_iterations * 6})
+        config = {
+            "recursion_limit": self._settings.max_agent_iterations * 6,
+            # thread_id scopes checkpoints to this conversation. Each turn
+            # is its own run (a new thread_id suffix per message) rather
+            # than one long-lived thread per conversation, since our turns
+            # are already independent invoke() calls, not a single paused
+            # run being resumed -- this still gives real state-history
+            # inspection per turn via self._graph.get_state_history(config).
+            "configurable": {"thread_id": f"{self._conv.conversation_id}:{len(self._conv.turns)}"},
+        }
+        result = self._graph.invoke(initial, config=config)
         return result
 
     # ------------------------------------------------------------------
