@@ -45,6 +45,16 @@ class ChatMessageOut(BaseModel):
     iterations: int = 1
 
 
+class ConversationTurnOut(BaseModel):
+    role: MessageRole
+    content: str
+
+
+class ConversationHistoryOut(BaseModel):
+    conversation_id: str
+    turns: list[ConversationTurnOut]
+
+
 class TraceStepType(str, Enum):
     COMPLIANCE_CHECK = "compliance_check"
     PLAN = "plan"

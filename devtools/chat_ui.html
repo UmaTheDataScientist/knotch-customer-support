@@ -93,7 +93,8 @@
 <div id="chatPane">
   <header>
     <h1>Knotch AI Customer Support</h1>
-    <input id="convId" readonly>
+    <input id="convId" placeholder="conversation id">
+    <button class="small" onclick="loadConversation()">Load</button>
     <button class="small" onclick="newConversation()">New conversation</button>
   </header>
   <div id="messages"></div>
@@ -127,6 +128,34 @@ function newConversation() {
   $('messages').innerHTML = '';
   $('traceSteps').innerHTML = '<div class="empty-state">No trace yet.</div>';
   $('traceMeta').textContent = 'Send a message to see the plan → act → observe → verify steps.';
+}
+
+async function loadConversation() {
+  const id = $('convId').value.trim();
+  if (!id) return;
+
+  try {
+    const resp = await fetch(`${apiBase()}/conversations/${id}/messages`);
+    if (resp.status === 404) {
+      $('messages').innerHTML = '';
+      addMessage(`No conversation found with id "${id}". It may not exist yet, or the server has restarted since (conversation state is in-memory only).`, 'bot');
+      $('traceSteps').innerHTML = '<div class="empty-state">No trace yet.</div>';
+      return;
+    }
+    if (!resp.ok) return;
+
+    const history = await resp.json();
+    convId = id;
+    $('messages').innerHTML = '';
+    for (const turn of history.turns) {
+      if (turn.role === 'user' || turn.role === 'assistant') {
+        addMessage(turn.content, turn.role === 'user' ? 'user' : 'bot');
+      }
+    }
+    await loadTrace();
+  } catch (e) {
+    addMessage(`Request failed: ${e.message}. Is the server running at ${apiBase()}?`, 'bot');
+  }
 }
 
 function addMessage(text, who) {

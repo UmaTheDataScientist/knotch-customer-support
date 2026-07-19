@@ -58,3 +58,32 @@ def test_health_check():
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_get_messages_returns_full_turn_history(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    client.post("/conversations/history-test/messages", json={"message": "x"})
+    client.post("/conversations/history-test/messages", json={"message": "i forgot my password"})
+
+    resp = client.get("/conversations/history-test/messages")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["conversation_id"] == "history-test"
+    assert len(body["turns"]) == 4  # user, assistant, user, assistant
+    assert body["turns"][0]["role"] == "user"
+    assert body["turns"][0]["content"] == "x"
+    assert body["turns"][1]["role"] == "assistant"
+
+    app.dependency_overrides.clear()
+
+
+def test_get_messages_for_unknown_conversation_is_404(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    resp = client.get("/conversations/does-not-exist/messages")
+    assert resp.status_code == 404
+
+    app.dependency_overrides.clear()
