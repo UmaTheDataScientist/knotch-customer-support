@@ -4,6 +4,16 @@ A customer support app that handles multi-turn conversations, figures out which
 tool to use for each request, and checks its own answers before replying. Built
 with FastAPI and LangGraph.
 
+**Start here as a reviewer:**
+- `app/agents/graph.py` — the Plan → Act → Observe → Verify loop as a LangGraph
+  state machine (the core of the system).
+- `app/agents/compliance.py` — the guardrail agent, and why it runs before the
+  main agent rather than in parallel or after.
+- `tests/integration/test_conversations.py` — covers the four example
+  interactions from the assignment doc, plus a few regression tests for real
+  bugs found by testing against a live model (not just the offline suite).
+- `eval/run_eval.py` — automated eval harness, 13 scenarios, 100% pass rate.
+
 ## How to run it
 
 No API key needed to try it out — it defaults to an offline mode for
@@ -138,3 +148,31 @@ export LLM_PROVIDER=openai
 export OPENAI_API_KEY=sk-...
 docker compose up --build
 ```
+
+## How I'd evaluate this in production
+
+**Subjective quality** (helpfulness, tone, hallucination rate): LLM-as-judge
+against a rubric on a sample of real conversations, paired with periodic human
+spot-checks — the agreement rate between judge and human becomes its own
+metric to watch for judge drift.
+
+**Objective metrics**: retrieval precision@k against a labeled query set;
+tool-call accuracy (did the planner pick the tool a human reviewer would
+have); per-step and end-to-end latency (`TraceStep.latency_ms`), broken out
+by tool; cost per conversation (`ConversationTrace.total_cost_usd`), with
+alerts on conversations that hit `max_verification_retries`, since those pay
+for extra LLM calls without necessarily resolving anything.
+
+**Failure modes to watch for**: the verify step itself hallucinating
+"grounded: true" for an ungrounded answer (needs human audits of a sample of
+`verified: true` responses, not just trusting the flag); the Compliance
+Agent producing false positives/negatives as phrasing gets more creative;
+retrieval drift if the KB changes but the embedding cache doesn't catch it;
+the planner regularly hitting the iteration cap and force-escalating, which
+would signal the tool set or prompts need attention.
+
+**With two more weeks**: Postgres + pgvector instead of the in-memory store
+for real persistence and concurrent access; parallel tool execution for
+independent lookups; a larger labeled eval set with LLM-as-judge wired into
+CI instead of the current rule-based scoring; a human-in-the-loop review
+queue for `escalate_to_human` cases.
