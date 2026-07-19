@@ -118,3 +118,23 @@ http://127.0.0.1:5500/chat_ui.html
 
 If nothing happens when you send a message, check the "API base" field at the
 bottom of the page matches the port your server is running on.
+
+## Running everything with Docker
+
+Brings up the API and the frontend together, no local Python setup needed:
+
+```bash
+docker compose up --build
+```
+
+- API: `http://127.0.0.1:8000`
+- Frontend: `http://127.0.0.1:5500/chat_ui.html`
+
+Defaults to the offline mode (`LLM_PROVIDER=fake`), same as running it
+locally. To use a real key, export the same variables `docker-compose.yml`
+already reads before running the command above:
+```bash
+export LLM_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+docker compose up --build
+```

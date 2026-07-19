@@ -1,0 +1,13 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+data/embedding_cache.json
+eval/eval_embedding_cache.json
+devtools/
+scripts/
+tests/
+eval/
+*.md

@@ -10,3 +10,14 @@ services:
       - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-small}
     volumes:
       - ./data:/app/data
+
+  frontend:
+    image: python:3.12-slim
+    working_dir: /devtools
+    volumes:
+      - ./devtools:/devtools:ro
+    ports:
+      - "5500:5500"
+    command: ["python", "-m", "http.server", "5500"]
+    depends_on:
+      - support-agent
