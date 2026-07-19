@@ -86,6 +86,21 @@
   .empty-state { color: var(--text-dim); font-size: 13px; padding: 20px; text-align: center; }
   #configBar { padding: 8px 18px; font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border); }
   #configBar input { background: transparent; border: none; color: var(--text-dim); font-size: 11px; width: 220px; }
+  #browseList {
+    border-bottom: 1px solid var(--border);
+    max-height: 160px;
+    overflow-y: auto;
+    background: var(--panel);
+  }
+  .browse-item {
+    padding: 8px 18px;
+    font-size: 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+  }
+  .browse-item:hover { background: var(--panel-2); }
+  .browse-item .bi-id { color: var(--accent); font-weight: 600; }
+  .browse-item .bi-preview { color: var(--text-dim); margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -95,8 +110,10 @@
     <h1>Knotch AI Customer Support</h1>
     <input id="convId" placeholder="conversation id">
     <button class="small" onclick="loadConversation()">Load</button>
+    <button class="small" onclick="browseConversations()">Browse</button>
     <button class="small" onclick="newConversation()">New conversation</button>
   </header>
+  <div id="browseList" style="display:none;"></div>
   <div id="messages"></div>
   <div id="inputBar">
     <input id="msgInput" placeholder="Try: how do I reset my password? / x / is the site down? / write me a poem" onkeydown="if(event.key==='Enter') send()">
@@ -128,6 +145,41 @@ function newConversation() {
   $('messages').innerHTML = '';
   $('traceSteps').innerHTML = '<div class="empty-state">No trace yet.</div>';
   $('traceMeta').textContent = 'Send a message to see the plan → act → observe → verify steps.';
+}
+
+async function browseConversations() {
+  const panel = $('browseList');
+  const isOpen = panel.style.display !== 'none';
+  if (isOpen) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${apiBase()}/conversations`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    panel.innerHTML = '';
+    if (!data.conversations.length) {
+      panel.innerHTML = '<div class="browse-item">No conversations yet in this server session.</div>';
+    } else {
+      data.conversations.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'browse-item';
+        item.innerHTML = `<span class="bi-id">${c.conversation_id}</span><span class="bi-preview">${c.turn_count} turns &middot; ${escapeHtml(c.first_message_preview || '(no preview)')}</span>`;
+        item.onclick = () => {
+          $('convId').value = c.conversation_id;
+          panel.style.display = 'none';
+          loadConversation();
+        };
+        panel.appendChild(item);
+      });
+    }
+    panel.style.display = 'block';
+  } catch (e) {
+    addMessage(`Request failed: ${e.message}. Is the server running at ${apiBase()}?`, 'bot');
+  }
 }
 
 async function loadConversation() {

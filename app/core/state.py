@@ -81,3 +81,11 @@ class ConversationStore:
 
     def get(self, conversation_id: str) -> Optional[ConversationState]:
         return self._states.get(conversation_id)
+
+    def list_ids(self) -> list[str]:
+        """Returns every conversation id currently held in memory. There is
+        no persistence, ordering, or pagination here on purpose -- this is a
+        thin debugging/discovery aid, not a production listing API (which
+        would need created/updated timestamps and a real backing store)."""
+        with self._lock:
+            return list(self._states.keys())

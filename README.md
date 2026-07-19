@@ -68,11 +68,12 @@ python -m http.server 5500
 ```
 Then open `http://127.0.0.1:5500/chat_ui.html`. It's a simple two-panel chat
 interface: plain chat on the left, a live trace of each plan/act/observe/
-verify step on the right. Type a conversation id into the box at the top and
-click Load to resume a previous conversation (works as long as the server
-hasn't restarted, since state is in-memory). If nothing happens when you send
-a message, check the "API base" field at the bottom of the page matches the
-port your server is running on.
+verify step on the right. Click Browse to see every conversation currently
+held by the server and click into one, or type a conversation id directly and
+click Load. Both work as long as the server hasn't restarted, since
+conversation state is in-memory only (see "Extras" below). If nothing happens
+when you send a message, check the "API base" field at the bottom of the page
+matches the port your server is running on.
 
 **Start here as a reviewer:**
 - `app/agents/graph.py`, the Plan → Act → Observe → Verify loop as a LangGraph

@@ -55,6 +55,16 @@ class ConversationHistoryOut(BaseModel):
     turns: list[ConversationTurnOut]
 
 
+class ConversationSummaryOut(BaseModel):
+    conversation_id: str
+    turn_count: int
+    first_message_preview: str = ""
+
+
+class ConversationListOut(BaseModel):
+    conversations: list[ConversationSummaryOut]
+
+
 class TraceStepType(str, Enum):
     COMPLIANCE_CHECK = "compliance_check"
     PLAN = "plan"

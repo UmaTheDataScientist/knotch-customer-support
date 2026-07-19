@@ -87,3 +87,34 @@ def test_get_messages_for_unknown_conversation_is_404(orchestrator, conv_store):
     assert resp.status_code == 404
 
     app.dependency_overrides.clear()
+
+
+def test_list_conversations_is_empty_initially(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    resp = client.get("/conversations")
+    assert resp.status_code == 200
+    assert resp.json() == {"conversations": []}
+
+    app.dependency_overrides.clear()
+
+
+def test_list_conversations_shows_active_ones_with_preview(orchestrator, conv_store):
+    _override_deps(app, orchestrator, conv_store)
+    client = TestClient(app)
+
+    client.post("/conversations/list-test-1/messages", json={"message": "How do I reset my password?"})
+    client.post("/conversations/list-test-2/messages", json={"message": "x"})
+
+    resp = client.get("/conversations")
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = {c["conversation_id"] for c in body["conversations"]}
+    assert ids == {"list-test-1", "list-test-2"}
+
+    conv1 = next(c for c in body["conversations"] if c["conversation_id"] == "list-test-1")
+    assert conv1["turn_count"] == 2  # user + assistant
+    assert conv1["first_message_preview"] == "How do I reset my password?"
+
+    app.dependency_overrides.clear()

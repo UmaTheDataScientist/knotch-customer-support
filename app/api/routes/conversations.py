@@ -5,9 +5,41 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.agents.orchestrator import SupportOrchestrator
 from app.core.dependencies import get_conversation_store, get_orchestrator
 from app.core.state import ConversationStore
-from app.models.schemas import ChatMessageIn, ChatMessageOut, ConversationHistoryOut, ConversationTrace, ConversationTurnOut
+from app.models.schemas import (
+    ChatMessageIn,
+    ChatMessageOut,
+    ConversationHistoryOut,
+    ConversationListOut,
+    ConversationSummaryOut,
+    ConversationTrace,
+    ConversationTurnOut,
+    MessageRole,
+)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+
+@router.get("", response_model=ConversationListOut)
+async def list_conversations(
+    store: ConversationStore = Depends(get_conversation_store),
+) -> ConversationListOut:
+    """Lists every conversation currently held in memory. A debugging/
+    discovery aid, not a production listing API -- there's no persistence,
+    pagination, or ordering by recency here (see ConversationStore.list_ids)."""
+    summaries = []
+    for conv_id in store.list_ids():
+        conv = store.get(conv_id)
+        if conv is None:
+            continue
+        first_user_turn = next((t.content for t in conv.turns if t.role == MessageRole.USER), "")
+        summaries.append(
+            ConversationSummaryOut(
+                conversation_id=conv_id,
+                turn_count=len(conv.turns),
+                first_message_preview=first_user_turn[:80],
+            )
+        )
+    return ConversationListOut(conversations=summaries)
 
 
 @router.post("/{conversation_id}/messages", response_model=ChatMessageOut)
