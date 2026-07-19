@@ -9,6 +9,17 @@ to maintain." A graph makes the replan cycle and the two different bounds
 (max total iterations vs. max verification retries) visible as edges
 instead of buried in a while-loop's if-statements -- which is exactly the
 debugging affordance the observability requirement is asking for.
+
+Multi-intent handling: the plan step can decompose one user message into
+several sub-requests (e.g. "edit my avatar and cancel my subscription" is
+two, not one), each choosing its own tool. act_step executes every
+sub-request in order UNLESS one of them resolves to a direct-response tool
+(ask_user_clarification/refuse/escalate_to_human), in which case that one
+short-circuits the whole turn -- deliberately, so a genuinely ambiguous or
+sensitive sub-request never gets silently blended with an unrelated answer
+in the same reply. observe_step then combines each sub-request's answer
+into one coherent response instead of answering only the first or the one
+whichever tool call happened to retrieve.
 """
 from __future__ import annotations
 
@@ -27,6 +38,8 @@ from app.models.schemas import MessageRole, ResponseSource, TraceStepType
 from app.tools.definitions import Tool
 
 # Tools whose output IS the user-facing response (no synthesis LLM call needed).
+# If any sub-request resolves to one of these, it short-circuits the whole
+# turn -- see module docstring.
 _DIRECT_RESPONSE_TOOLS = {"ask_user_clarification", "refuse", "escalate_to_human"}
 
 
@@ -34,9 +47,9 @@ class AgentState(TypedDict, total=False):
     conversation_id: str
     user_message: str
     context_messages: list[dict[str, str]]
-    plan: dict[str, Any]
-    tool_name: str
-    tool_output: dict[str, Any]
+    sub_plans: list[dict[str, Any]]
+    sub_results: list[dict[str, Any]]
+    short_circuit_tool: Optional[str]
     tools_used: list[str]
     matched_questions: list[str]
     draft_response: str
@@ -123,15 +136,17 @@ class SupportAgentGraph:
         with self._conv.tracer.step(TraceStepType.PLAN, iteration=state["iteration"]) as trace:
             if state["iteration"] > self._settings.max_agent_iterations:
                 # Failed to converge -> forced escalation rather than an infinite/失敗 loop.
-                plan = {
-                    "intent": "unresolved",
-                    "tool": "escalate_to_human",
-                    "tool_args": {
-                        "reason": "Agent failed to converge within iteration budget.",
-                        "transcript": state["user_message"],
-                    },
-                    "reasoning": "Iteration budget exhausted.",
-                }
+                sub_plans = [
+                    {
+                        "intent": "unresolved",
+                        "tool": "escalate_to_human",
+                        "tool_args": {
+                            "reason": "Agent failed to converge within iteration budget.",
+                            "transcript": state["user_message"],
+                        },
+                        "reasoning": "Iteration budget exhausted.",
+                    }
+                ]
                 trace.detail["forced"] = True
             else:
                 messages = [{"role": "system", "content": self._plan_system_prompt}]
@@ -149,110 +164,166 @@ class SupportAgentGraph:
                     )
                 messages.extend(state["context_messages"])
                 result = self._llm.chat(messages, json_mode=True, temperature=0.1)
-                plan = self._safe_json(result.content)
-                plan.setdefault("tool", "ask_user_clarification")
-                plan.setdefault("tool_args", {})
+                parsed = self._safe_json(result.content)
+                sub_plans = self._normalize_plan(parsed)
                 self._conv.tracer.record_llm_usage(
                     trace, result.prompt_tokens, result.completion_tokens, result.estimated_cost_usd
                 )
-            trace.detail["plan"] = plan
-        state["plan"] = plan
+            trace.detail["sub_plans"] = sub_plans
+        state["sub_plans"] = sub_plans
         return state
 
     def _act_node(self, state: AgentState) -> AgentState:
-        plan = state["plan"]
-        tool_name = plan.get("tool", "ask_user_clarification")
-        tool = self._tools.get(tool_name) or self._tools["ask_user_clarification"]
-        args = dict(plan.get("tool_args") or {})
+        sub_plans = state["sub_plans"]
+        sub_results: list[dict[str, Any]] = []
+        short_circuit_tool: Optional[str] = None
+        tools_used: list[str] = []
 
-        with self._conv.tracer.step(TraceStepType.TOOL_CALL, tool=tool.name, args=args) as trace:
-            try:
-                if tool.name == "ask_user_clarification" and "question" not in args:
-                    args["question"] = "Could you share a bit more detail about what you're trying to do?"
-                if tool.name == "escalate_to_human":
-                    args.setdefault("transcript", state["user_message"])
-                    args.setdefault("reason", plan.get("reasoning", "Escalated by planner."))
-                if tool.name == "refuse" and "reason" not in args:
-                    args["reason"] = plan.get("reasoning", "Policy refusal.")
-                result = tool.run(**args)
-            except Exception as exc:  # noqa: BLE001 - tool failures must not crash the graph
-                trace.detail["error"] = str(exc)
-                result = tool.run(**self._fallback_args(tool.name, state["user_message"]))
-            trace.detail["output"] = result.output
+        with self._conv.tracer.step(TraceStepType.TOOL_CALL, sub_request_count=len(sub_plans)) as trace:
+            call_details = []
+            for sub_plan in sub_plans:
+                tool_name = sub_plan.get("tool", "ask_user_clarification")
+                tool = self._tools.get(tool_name) or self._tools["ask_user_clarification"]
+                args = dict(sub_plan.get("tool_args") or {})
 
-        state["tool_name"] = tool.name
-        state["tool_output"] = result.output
-        state["tools_used"] = state.get("tools_used", []) + [tool.name]
+                try:
+                    if tool.name == "ask_user_clarification" and "question" not in args:
+                        args["question"] = "Could you share a bit more detail about what you're trying to do?"
+                    if tool.name == "escalate_to_human":
+                        args.setdefault("transcript", state["user_message"])
+                        args.setdefault("reason", sub_plan.get("reasoning", "Escalated by planner."))
+                    if tool.name == "refuse" and "reason" not in args:
+                        args["reason"] = sub_plan.get("reasoning", "Policy refusal.")
+                    result = tool.run(**args)
+                    error = None
+                except Exception as exc:  # noqa: BLE001 - tool failures must not crash the graph
+                    error = str(exc)
+                    result = tool.run(**self._fallback_args(tool.name, state["user_message"]))
+
+                call_details.append({"tool": tool.name, "args": args, "output": result.output, "error": error})
+                sub_results.append({"tool_name": tool.name, "tool_output": result.output})
+                tools_used.append(tool.name)
+
+                if tool.name in _DIRECT_RESPONSE_TOOLS and short_circuit_tool is None:
+                    short_circuit_tool = tool.name
+                    # Stop executing further sub-requests once a direct-response
+                    # tool fires -- see module docstring for why a clarification
+                    # question, refusal, or escalation should never be blended
+                    # with an unrelated answer in the same reply.
+                    break
+            trace.detail["sub_calls"] = call_details
+
+        state["sub_results"] = sub_results
+        state["short_circuit_tool"] = short_circuit_tool
+        state["tools_used"] = state.get("tools_used", []) + tools_used
         return state
 
     def _observe_node(self, state: AgentState) -> AgentState:
-        tool_name = state["tool_name"]
-        output = state["tool_output"]
+        sub_results = state["sub_results"]
 
-        with self._conv.tracer.step(TraceStepType.OBSERVE, tool=tool_name) as trace:
-            if tool_name == "ask_user_clarification":
-                state["draft_response"] = output["question"]
-                state["source"] = ResponseSource.AGENT.value
-            elif tool_name == "refuse":
-                state["draft_response"] = (
-                    "I'm not able to help with that request. If you have an account or product "
-                    "support question, I'm happy to help."
-                )
-                state["source"] = ResponseSource.AGENT.value
-            elif tool_name == "escalate_to_human":
-                state["draft_response"] = (
-                    "I've escalated this to our support team (ticket "
-                    f"{output.get('ticket_id', 'N/A')}); they'll follow up with you directly."
-                )
-                state["source"] = ResponseSource.ESCALATION.value
-            elif tool_name == "search_faq":
-                matches = output.get("matches", [])
-                state["matched_questions"] = [m["question"] for m in matches]
-                if matches:
-                    state["draft_response"] = self._synthesize(state["user_message"], matches)
-                    state["source"] = ResponseSource.FAQ.value
-                else:
-                    state["draft_response"] = (
-                        "I couldn't find anything in our help center that matches that. "
-                        "Want me to connect you with a human agent, or could you rephrase?"
-                    )
-                    state["source"] = ResponseSource.AGENT.value
-            elif tool_name == "get_faq_by_category":
-                questions = output.get("questions", [])
-                state["matched_questions"] = [q["question"] for q in questions]
-                state["draft_response"] = self._synthesize(state["user_message"], questions)
-                state["source"] = ResponseSource.FAQ.value
-            elif tool_name == "general_knowledge_lookup":
-                state["draft_response"] = output.get("answer", "")
-                state["source"] = ResponseSource.GENERAL_KNOWLEDGE.value
-            elif tool_name == "check_system_status":
-                state["draft_response"] = f"{output.get('detail', '')}"
-                state["source"] = ResponseSource.AGENT.value
-            elif tool_name == "lookup_account_status":
-                status = output.get("status", "unknown")
-                status_copy = {
-                    "active": "Your account is active with no restrictions.",
-                    "locked": "Your account is currently locked. This usually happens after multiple failed login attempts or a security flag -- I can escalate this to get it unlocked.",
-                    "pending_verification": "Your account is pending verification -- check your email for a verification link.",
-                }.get(status, "I couldn't determine a clear status for that account.")
-                state["draft_response"] = status_copy
-                state["source"] = ResponseSource.AGENT.value
+        with self._conv.tracer.step(TraceStepType.OBSERVE, sub_result_count=len(sub_results)) as trace:
+            if state.get("short_circuit_tool"):
+                # Exactly one direct-response tool won the turn -- answer with
+                # just that, no combination needed.
+                sr = sub_results[0]
+                text, source, matched = self._answer_for_tool(sr["tool_name"], sr["tool_output"], state["user_message"])
+                state["draft_response"] = text
+                state["source"] = source
+                state["matched_questions"] = matched
             else:
-                state["draft_response"] = "I'm not sure how to help with that yet."
-                state["source"] = ResponseSource.AGENT.value
+                parts: list[str] = []
+                sources: list[str] = []
+                matched_all: list[str] = []
+                for sr in sub_results:
+                    text, source, matched = self._answer_for_tool(
+                        sr["tool_name"], sr["tool_output"], state["user_message"]
+                    )
+                    parts.append(text)
+                    sources.append(source)
+                    matched_all.extend(matched)
+
+                state["draft_response"] = self._combine_answer_parts(parts)
+                unique_sources = set(sources)
+                # If every sub-answer came from the same kind of source, keep
+                # that source; a genuinely mixed multi-part answer (e.g. one
+                # FAQ match plus one general-knowledge answer) reports as
+                # AGENT rather than picking one source arbitrarily.
+                state["source"] = sources[0] if len(unique_sources) == 1 else ResponseSource.AGENT.value
+                state["matched_questions"] = matched_all
 
             trace.detail["draft_response"] = state["draft_response"]
         return state
 
+    def _answer_for_tool(self, tool_name: str, output: dict[str, Any], user_message: str) -> tuple[str, str, list[str]]:
+        """Turns one sub-request's tool output into (answer_text, source,
+        matched_questions). Shared by both the short-circuit path (one
+        direct-response tool) and the multi-part combination path."""
+        if tool_name == "ask_user_clarification":
+            return output["question"], ResponseSource.AGENT.value, []
+        if tool_name == "refuse":
+            return (
+                "I'm not able to help with that request. If you have an account or product "
+                "support question, I'm happy to help.",
+                ResponseSource.AGENT.value,
+                [],
+            )
+        if tool_name == "escalate_to_human":
+            return (
+                f"I've escalated this to our support team (ticket {output.get('ticket_id', 'N/A')}); "
+                "they'll follow up with you directly.",
+                ResponseSource.ESCALATION.value,
+                [],
+            )
+        if tool_name == "search_faq":
+            matches = output.get("matches", [])
+            matched_qs = [m["question"] for m in matches]
+            if matches:
+                return self._synthesize(user_message, matches), ResponseSource.FAQ.value, matched_qs
+            return (
+                "I couldn't find anything in our help center that matches that. "
+                "Want me to connect you with a human agent, or could you rephrase?",
+                ResponseSource.AGENT.value,
+                [],
+            )
+        if tool_name == "get_faq_by_category":
+            questions = output.get("questions", [])
+            matched_qs = [q["question"] for q in questions]
+            return self._synthesize(user_message, questions), ResponseSource.FAQ.value, matched_qs
+        if tool_name == "general_knowledge_lookup":
+            return output.get("answer", ""), ResponseSource.GENERAL_KNOWLEDGE.value, []
+        if tool_name == "check_system_status":
+            return f"{output.get('detail', '')}", ResponseSource.AGENT.value, []
+        if tool_name == "lookup_account_status":
+            status = output.get("status", "unknown")
+            status_copy = {
+                "active": "Your account is active with no restrictions.",
+                "locked": "Your account is currently locked. This usually happens after multiple failed login attempts or a security flag -- I can escalate this to get it unlocked.",
+                "pending_verification": "Your account is pending verification -- check your email for a verification link.",
+            }.get(status, "I couldn't determine a clear status for that account.")
+            return status_copy, ResponseSource.AGENT.value, []
+        return "I'm not sure how to help with that yet.", ResponseSource.AGENT.value, []
+
+    @staticmethod
+    def _combine_answer_parts(parts: list[str]) -> str:
+        """Combines multiple sub-request answers into one reply. Deterministic
+        (no extra LLM call) on purpose -- each part was already synthesized
+        from its own retrieved content; blending unrelated topics into a
+        single further LLM pass risks the model conflating them, and a plain
+        join is simpler to test and reason about."""
+        cleaned = [p.strip() for p in parts if p and p.strip()]
+        if len(cleaned) <= 1:
+            return cleaned[0] if cleaned else ""
+        return "\n\n".join(cleaned)
+
     def _verify_node(self, state: AgentState) -> AgentState:
-        tool_name = state["tool_name"]
-        with self._conv.tracer.step(TraceStepType.VERIFY, tool=tool_name) as trace:
-            if tool_name in _DIRECT_RESPONSE_TOOLS:
-                # These responses are structurally fixed (clarification question, refusal
-                # message, escalation ack) -- nothing to hallucinate-check.
+        with self._conv.tracer.step(TraceStepType.VERIFY, sub_result_count=len(state.get("sub_results", []))) as trace:
+            if state.get("short_circuit_tool"):
+                # Structurally fixed response (clarification/refusal/escalation)
+                # -- nothing to hallucinate-check.
                 state["verified"] = True
                 trace.detail["skipped"] = True
             else:
+                combined_context = [sr["tool_output"] for sr in state.get("sub_results", [])]
                 messages = [
                     {"role": "system", "content": VERIFY_SYSTEM_PROMPT},
                     {
@@ -261,7 +332,7 @@ class SupportAgentGraph:
                             {
                                 "user_question": state["user_message"],
                                 "draft_answer": state["draft_response"],
-                                "retrieved_context": state["tool_output"],
+                                "retrieved_context": combined_context,
                             }
                         ),
                     },
@@ -344,6 +415,38 @@ class SupportAgentGraph:
         if tool_name == "lookup_account_status":
             return {"account_id": "unknown"}
         return {}
+
+    @staticmethod
+    def _normalize_plan(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+        """Turns the planner's raw JSON into a list of sub-request dicts,
+        tolerating a model that returns the old single-plan shape or
+        something malformed, rather than crashing the graph."""
+        sub_requests = parsed.get("sub_requests")
+        if isinstance(sub_requests, list) and sub_requests:
+            normalized = []
+            for sr in sub_requests:
+                if not isinstance(sr, dict):
+                    continue
+                sr = dict(sr)
+                sr.setdefault("tool", "ask_user_clarification")
+                sr.setdefault("tool_args", {})
+                normalized.append(sr)
+            if normalized:
+                return normalized
+        # Fallback: model returned a single flat plan dict (old shape) rather
+        # than the sub_requests list -- treat it as one sub-request.
+        if "tool" in parsed:
+            single = dict(parsed)
+            single.setdefault("tool_args", {})
+            return [single]
+        return [
+            {
+                "intent": "unclear",
+                "tool": "ask_user_clarification",
+                "tool_args": {},
+                "reasoning": "Malformed or empty plan output.",
+            }
+        ]
 
     @staticmethod
     def _safe_json(text: str) -> dict[str, Any]:

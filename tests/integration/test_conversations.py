@@ -78,6 +78,33 @@ def test_forgotten_password_gets_a_recovery_caveat_not_the_change_password_steps
     assert "support" in out.response.lower()
 
 
+def test_multi_intent_message_answers_both_requests(orchestrator, conv_store):
+    """Real gap found by testing: a compound message like 'edit my avatar
+    and cancel my subscription' used to get answered as if it were one
+    request, silently dropping the second half even though retrieval had
+    already found both relevant FAQ entries. The planner now decomposes a
+    message into multiple sub-requests and the observe step combines every
+    sub-request's answer into one reply, instead of picking just one."""
+    conv = conv_store.get_or_create("multi-intent-1")
+    out = orchestrator.handle_message(conv, "I want to edit my avatar and cancel my subscription")
+
+    assert out.tools_used.count("search_faq") == 2
+    assert "avatar" in out.response.lower()
+    assert "subscription" in out.response.lower() or "cancel" in out.response.lower()
+
+
+def test_multi_intent_ambiguous_subrequest_short_circuits_whole_turn(orchestrator, conv_store):
+    """If any sub-request resolves to a direct-response tool (clarification,
+    refusal, escalation), that one should take over the whole turn rather
+    than being silently blended with an unrelated answer -- see the
+    short-circuit logic in _act_node."""
+    conv = conv_store.get_or_create("multi-intent-2")
+    out = orchestrator.handle_message(conv, "my account has been compromised and hacked, help")
+
+    assert out.tools_used == ["escalate_to_human"]
+    assert out.source == ResponseSource.ESCALATION
+
+
 def test_status_question_routes_to_check_system_status_not_static_faq(orchestrator, conv_store):
     conv = conv_store.get_or_create("status-1")
     out = orchestrator.handle_message(conv, "is the site down right now?")

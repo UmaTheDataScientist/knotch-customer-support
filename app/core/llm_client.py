@@ -238,21 +238,29 @@ class FakeLLMClient(LLMClient):
             if len(text_low) <= 3 or text_low in {"help", "help!", "help!!!"}:
                 return json.dumps(
                     {
-                        "intent": "ambiguous",
-                        "tool": "ask_user_clarification",
-                        "tool_args": {
-                            "question": "Could you tell me a bit more about what you're trying to do?"
-                        },
-                        "reasoning": "message too short to act on",
+                        "sub_requests": [
+                            {
+                                "intent": "ambiguous",
+                                "tool": "ask_user_clarification",
+                                "tool_args": {
+                                    "question": "Could you tell me a bit more about what you're trying to do?"
+                                },
+                                "reasoning": "message too short to act on",
+                            }
+                        ]
                     }
                 )
             if ("compromised" in text_low or "hacked" in text_low) or ("lost" in text_low and "data" in text_low):
                 return json.dumps(
                     {
-                        "intent": "security_incident",
-                        "tool": "escalate_to_human",
-                        "tool_args": {"reason": "security-sensitive request", "transcript": user_text},
-                        "reasoning": "requires human judgment/authority",
+                        "sub_requests": [
+                            {
+                                "intent": "security_incident",
+                                "tool": "escalate_to_human",
+                                "tool_args": {"reason": "security-sensitive request", "transcript": user_text},
+                                "reasoning": "requires human judgment/authority",
+                            }
+                        ]
                     }
                 )
             tokens = set(text_low.replace("?", " ").replace(",", " ").split())
@@ -263,28 +271,63 @@ class FakeLLMClient(LLMClient):
                 component = "payments" if "payment" in text_low else None
                 return json.dumps(
                     {
-                        "intent": "status_check",
-                        "tool": "check_system_status",
-                        "tool_args": {"component": component},
-                        "reasoning": "user is asking about live operational status, not a static FAQ answer",
+                        "sub_requests": [
+                            {
+                                "intent": "status_check",
+                                "tool": "check_system_status",
+                                "tool_args": {"component": component},
+                                "reasoning": "user is asking about live operational status, not a static FAQ answer",
+                            }
+                        ]
                     }
                 )
-            if "account" in text_low and ("status" in text_low or "locked" in text_low or "active" in text_low) and any(ch.isdigit() for ch in text_low):
+            if "account" in text_low and (
+                "status" in text_low or "locked" in text_low or "active" in text_low
+            ) and any(ch.isdigit() for ch in text_low):
                 acct_id = "".join(ch for ch in text_low if ch.isalnum())
                 return json.dumps(
                     {
-                        "intent": "account_status_check",
-                        "tool": "lookup_account_status",
-                        "tool_args": {"account_id": acct_id},
-                        "reasoning": "user gave an account identifier and wants its current status",
+                        "sub_requests": [
+                            {
+                                "intent": "account_status_check",
+                                "tool": "lookup_account_status",
+                                "tool_args": {"account_id": acct_id},
+                                "reasoning": "user gave an account identifier and wants its current status",
+                            }
+                        ]
                     }
                 )
+            # Naive multi-intent simulation: split on " and " and treat each
+            # part as its own sub-request, so offline tests can genuinely
+            # exercise decomposition without needing a real model. This is
+            # deliberately simple (word-based, not true intent parsing) --
+            # real decomposition quality depends on the actual LLM.
+            if " and " in user_text.lower():
+                raw_parts = [p.strip() for p in user_text.split(" and ") if p.strip()]
+                if len(raw_parts) >= 2:
+                    return json.dumps(
+                        {
+                            "sub_requests": [
+                                {
+                                    "intent": "faq_lookup",
+                                    "tool": "search_faq",
+                                    "tool_args": {"query": part},
+                                    "reasoning": f"distinct sub-request identified: {part!r}",
+                                }
+                                for part in raw_parts
+                            ]
+                        }
+                    )
             return json.dumps(
                 {
-                    "intent": "faq_lookup",
-                    "tool": "search_faq",
-                    "tool_args": {"query": user_text},
-                    "reasoning": "looks like a concrete support question worth checking the FAQ",
+                    "sub_requests": [
+                        {
+                            "intent": "faq_lookup",
+                            "tool": "search_faq",
+                            "tool_args": {"query": user_text},
+                            "reasoning": "looks like a concrete support question worth checking the FAQ",
+                        }
+                    ]
                 }
             )
 

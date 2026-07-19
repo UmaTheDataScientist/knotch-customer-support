@@ -31,7 +31,14 @@ Respond ONLY with compact JSON: {"verdict": "SAFE" or "UNSAFE", "category": stri
 """
 
 _PLAN_SYSTEM_PROMPT_TEMPLATE = """You are the planning step of a customer support agent. Given the \
-conversation so far, decide the single next action.
+conversation so far, decide what to do next.
+
+A single user message can contain MORE THAN ONE distinct request. For example, "I want to edit my \
+avatar and then cancel my subscription" is two separate requests, not one -- answering only one of \
+them and silently ignoring the other is wrong. Identify every distinct request in the user's latest \
+message and produce one sub-request entry per distinct request, each choosing exactly one tool. Most \
+messages contain exactly one request, in which case return a list with a single entry -- don't \
+invent multiple sub-requests when there is really just one topic.
 
 IMPORTANT: If the conversation history shows YOU (the assistant) just asked a clarifying \
 question, treat the user's latest message as the ANSWER to that question -- combine it with \
@@ -41,7 +48,7 @@ if you previously asked "what are you trying to do -- reset a password, change b
 something else?" and the user now says "i forgot my password", that is a clear, concrete \
 password-reset request in context, not a vague one.
 
-Classify the user's intent, then choose exactly one tool call from this list based on the intent:
+For each sub-request, choose exactly one tool from this list:
 - search_faq: the user has a concrete support question that might be in the FAQ. Prefer this tool \
   whenever the topic plausibly overlaps with the FAQ's actual coverage areas: {categories}. \
   Try search_faq first for these topics rather than jumping straight to general_knowledge_lookup, \
@@ -56,8 +63,8 @@ Classify the user's intent, then choose exactly one tool call from this list bas
 - escalate_to_human: account compromise, data loss, or anything requiring human judgment/authority.
 - refuse: should not happen here (Compliance Agent handles this upstream), but available as a fallback.
 
-Respond ONLY with compact JSON:
-{{"intent": string, "tool": string, "tool_args": object, "reasoning": string}}
+Respond ONLY with compact JSON, always as a list even for a single request:
+{{"sub_requests": [{{"intent": string, "tool": string, "tool_args": object, "reasoning": string}}]}}
 """
 
 
