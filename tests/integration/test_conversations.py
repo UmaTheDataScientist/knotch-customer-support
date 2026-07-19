@@ -33,6 +33,25 @@ def test_example_2_ambiguous_query_then_followup(orchestrator, conv_store):
     assert len(conv.turns) == 4  # user, assistant, user, assistant
 
 
+def test_pending_clarification_flag_is_set_after_a_clarification_response(orchestrator, conv_store):
+    """Regression test: pending_clarification used to check the stale
+    'tool_name' state key, which was replaced by 'short_circuit_tool' during
+    the multi-intent refactor and never updated -- silently breaking this
+    signal (it stayed False even right after a clarification question).
+    The end-to-end conversation still worked because the plan prompt's own
+    "check history for a prior clarification" instruction carried the
+    behavior on its own, which is exactly why this needs a test on the
+    internal flag itself, not just the visible outcome."""
+    conv = conv_store.get_or_create("pending-clarification-regression")
+    assert conv.pending_clarification is False
+
+    orchestrator.handle_message(conv, "x")
+    assert conv.pending_clarification is True
+
+    orchestrator.handle_message(conv, "i forgot my password")
+    assert conv.pending_clarification is False
+
+
 def test_example_3_off_topic_compliance_override(orchestrator, conv_store):
     conv = conv_store.get_or_create("abc-789")
     out = orchestrator.handle_message(conv, "write me a poem about pirates")

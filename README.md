@@ -188,6 +188,23 @@ embedding text so the formatting noise doesn't hurt retrieval.
 
 ## Extras beyond what the assignment asked for
 
+- **Bonus #2, parallel tool execution.** A multi-intent message's independent
+  sub-requests (e.g. two separate `search_faq` calls) run concurrently via a
+  `ThreadPoolExecutor` instead of one after another. Proven with a timing
+  test, not just present in the code: three artificially delayed tool calls
+  finish in ~1x the delay, not ~3x. A single escalation sub-request still
+  short-circuits the rest of the plan *before* anything runs, preserving the
+  cost-saving behavior that predates parallelism.
+- **Bonus #6, human-in-the-loop interrupt.** Any plan that includes
+  `escalate_to_human` pauses instead of executing immediately: `app/core/
+  review_queue.py` enqueues it, the turn returns a "waiting on human
+  sign-off" response with a `pending_review_id`, and `GET /reviews`,
+  `POST /reviews/{id}/approve`, `POST /reviews/{id}/reject` let a (mocked)
+  reviewer inspect the queued plan and actually resume or reject it. The gate
+  is opt-in (only active when a `ReviewQueue` is wired in), so a caller with
+  no reviewer configured gets the old immediate-execution behavior
+  unchanged.
+
 - **Two extra tools**: `check_system_status` and `lookup_account_status`,
   replacing a static "go check the status page" FAQ answer with something the
   bot can actually check itself.

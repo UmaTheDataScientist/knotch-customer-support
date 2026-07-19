@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import conversations
+from app.api.routes import conversations, reviews
 from app.models.schemas import ErrorResponse
 
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +28,7 @@ app.add_middleware(
 )
 
 app.include_router(conversations.router)
+app.include_router(reviews.router)
 
 
 @app.get("/health")

@@ -38,6 +38,7 @@ from app.agents.prompts import (
 )
 from app.config import Settings
 from app.core.llm_client import LLMClient
+from app.core.review_queue import ReviewQueue
 from app.core.state import ConversationState
 from app.core.text_utils import strip_markdown
 from app.models.schemas import MessageRole, ResponseSource, TraceStepType
@@ -66,6 +67,7 @@ class AgentState(TypedDict, total=False):
     verification_retries: int
     final_response: str
     done: bool
+    pending_review_id: Optional[str]
 
 
 class SupportAgentGraph:
@@ -76,11 +78,13 @@ class SupportAgentGraph:
         settings: Settings,
         conversation_state: ConversationState,
         faq_categories: list[str],
+        review_queue: Optional[ReviewQueue] = None,
     ):
         self._llm = llm
         self._tools = tools
         self._settings = settings
         self._conv = conversation_state
+        self._review_queue = review_queue
         # Built once per graph instance from the real KB categories -- see
         # build_plan_system_prompt's docstring for why this isn't a static
         # hardcoded string.
@@ -97,9 +101,14 @@ class SupportAgentGraph:
         g.add_node("observe_step", self._observe_node)
         g.add_node("verify_step", self._verify_node)
         g.add_node("finalize_step", self._finalize_node)
+        g.add_node("await_review_step", self._await_review_node)
 
         g.set_entry_point("plan_step")
-        g.add_edge("plan_step", "act_step")
+        g.add_conditional_edges(
+            "plan_step",
+            self._route_after_plan,
+            {"act": "act_step", "await_review": "await_review_step"},
+        )
         g.add_edge("act_step", "observe_step")
         g.add_edge("observe_step", "verify_step")
         g.add_conditional_edges(
@@ -107,6 +116,7 @@ class SupportAgentGraph:
             self._route_after_verify,
             {"replan": "plan_step", "finalize": "finalize_step"},
         )
+        g.add_edge("await_review_step", "finalize_step")
         g.add_edge("finalize_step", END)
         return g.compile(checkpointer=self._conv.checkpointer)
 
@@ -178,6 +188,40 @@ class SupportAgentGraph:
             trace.detail["sub_plans"] = sub_plans
             trace.detail["prompt_version"] = PROMPT_VERSION
         state["sub_plans"] = sub_plans
+        return state
+
+    def _route_after_plan(self, state: AgentState) -> str:
+        """Bonus: human-in-the-loop interrupt. Any sub-request that resolves
+        to escalate_to_human pauses the whole turn for human review instead
+        of executing immediately -- see ReviewQueue and the /reviews
+        endpoints. Escalation is the one tool whose real-world consequence
+        (paging a person, opening a ticket with authority attached) is worth
+        a human sign-off before it actually happens, unlike the other
+        direct-response tools (a clarifying question or a refusal carry no
+        real-world side effect, so they don't need this gate)."""
+        if self._review_queue is not None and any(
+            sp.get("tool") == "escalate_to_human" for sp in state.get("sub_plans", [])
+        ):
+            return "await_review"
+        return "act"
+
+    def _await_review_node(self, state: AgentState) -> AgentState:
+        with self._conv.tracer.step(TraceStepType.AWAIT_REVIEW) as trace:
+            review = self._review_queue.enqueue(
+                conversation_id=state["conversation_id"],
+                user_message=state["user_message"],
+                sub_plans=state["sub_plans"],
+            )
+            state["draft_response"] = (
+                f"This needs a human's sign-off before I can act on it (review id: {review.review_id}). "
+                "I'll follow up once it's been reviewed."
+            )
+            state["source"] = ResponseSource.ESCALATION.value
+            state["verified"] = True
+            state["matched_questions"] = []
+            state["pending_review_id"] = review.review_id
+            trace.detail["review_id"] = review.review_id
+            trace.detail["sub_plans"] = state["sub_plans"]
         return state
 
     def _act_node(self, state: AgentState) -> AgentState:
