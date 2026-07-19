@@ -186,24 +186,54 @@ dynamically. `"help!!! my account is locked"` is a real case just noisily
 formatted, so it's kept, with a normalized version used only for the
 embedding text so the formatting noise doesn't hurt retrieval.
 
-## Extras beyond what the assignment asked for
+## Bonus points implemented
 
-- **Bonus #2, parallel tool execution.** A multi-intent message's independent
+The assignment lists 11 optional bonuses and says to pick a few rather than
+attempt all of them. Six are done here, matching the assignment's own
+numbering:
+
+- **#1, LangGraph state machine with cycles and checkpointing.** Explicit
+  nodes/edges/conditional transitions (`app/agents/graph.py`), a real replan
+  cycle (verify fails -> back to plan, capped at 2 retries), and genuine
+  LangGraph checkpointing (a `MemorySaver` per conversation) -- proven with a
+  test that inspects `get_state_history()` directly and fails if the
+  checkpointer is removed (`tests/integration/test_checkpointing.py`).
+- **#2, parallel tool execution.** A multi-intent message's independent
   sub-requests (e.g. two separate `search_faq` calls) run concurrently via a
   `ThreadPoolExecutor` instead of one after another. Proven with a timing
-  test, not just present in the code: three artificially delayed tool calls
-  finish in ~1x the delay, not ~3x. A single escalation sub-request still
-  short-circuits the rest of the plan *before* anything runs, preserving the
-  cost-saving behavior that predates parallelism.
-- **Bonus #6, human-in-the-loop interrupt.** Any plan that includes
-  `escalate_to_human` pauses instead of executing immediately: `app/core/
-  review_queue.py` enqueues it, the turn returns a "waiting on human
+  test: three artificially delayed tool calls finish in ~1x the delay, not
+  ~3x (`test_independent_sub_requests_run_in_parallel_not_sequentially`). A
+  single escalation sub-request still short-circuits the rest of the plan
+  *before* anything runs, preserving the cost-saving behavior that predates
+  parallelism.
+- **#5, eval harness.** `eval/dataset.jsonl` (13 scenarios: happy path,
+  ambiguous, off-topic, malicious, multi-turn, escalation, status checks)
+  scored by `eval/run_eval.py` against source accuracy, tool-use accuracy,
+  and guardrail success rate. Currently 100% across all three, offline.
+- **#6, human-in-the-loop interrupt.** Any plan that includes
+  `escalate_to_human` pauses instead of executing immediately
+  (`app/core/review_queue.py`), the turn returns a "waiting on human
   sign-off" response with a `pending_review_id`, and `GET /reviews`,
   `POST /reviews/{id}/approve`, `POST /reviews/{id}/reject` let a (mocked)
   reviewer inspect the queued plan and actually resume or reject it. The gate
   is opt-in (only active when a `ReviewQueue` is wired in), so a caller with
   no reviewer configured gets the old immediate-execution behavior
   unchanged.
+- **#9, idempotent embedding management.** `EmbeddingIndex.build()` hashes
+  each item's embedding text (`sha256`) and only re-embeds rows whose hash
+  actually changed, verified by building twice and checking `reused` vs
+  `embedded` counts.
+- **#11, Dockerfile + docker-compose for the whole system.** Two services,
+  API and frontend, one `docker compose up --build` command for both.
+
+Not implemented, for the record: #3 long-term memory, #4 cost-aware routing,
+#7 auth via `Depends`, #8 Postgres + pgvector, #10 async embedding ingestion
+via Celery.
+
+## Extras beyond what the assignment asked for
+
+Things added that aren't on the assignment's bonus list at all, but seemed
+worth building along the way:
 
 - **Two extra tools**: `check_system_status` and `lookup_account_status`,
   replacing a static "go check the status page" FAQ answer with something the
@@ -219,6 +249,11 @@ embedding text so the formatting noise doesn't hurt retrieval.
   each message. Not part of the graded API itself, built so the agent's
   reasoning could be watched happen in real time instead of reading raw trace
   JSON in a terminal.
+- **`GET /conversations` and `GET /conversations/{id}/messages`** -- list
+  every conversation currently in memory (with a preview) and fetch a
+  conversation's full message history, not just its trace. Backs the
+  dev UI's Browse/Load buttons; without these there was no way to discover
+  or resume an existing conversation by id.
 - **Two small diagnostic scripts** in `scripts/`. One confirms a real API key
   works with exactly 2 calls, the other inspects what actually got loaded from
   `.env` without ever printing the secret.
@@ -231,9 +266,6 @@ embedding text so the formatting noise doesn't hurt retrieval.
 - **The planner's FAQ category list is derived from the real knowledge base
   at runtime**, not hand-typed, so editing the KB can never make the prompt
   silently go stale.
-- **Docker Compose covers the whole system**, not just the API. A second
-  service serves the frontend too, so `docker compose up` is a single command
-  for both.
 - **A precondition-mismatch check on retrieved FAQ content.** The provided
   dataset's only password-reset entry says "enter your current password,"
   which doesn't fit someone who says they forgot it, and there's no separate
