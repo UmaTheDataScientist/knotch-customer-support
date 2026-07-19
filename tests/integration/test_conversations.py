@@ -93,6 +93,21 @@ def test_multi_intent_message_answers_both_requests(orchestrator, conv_store):
     assert "subscription" in out.response.lower() or "cancel" in out.response.lower()
 
 
+def test_multi_intent_handles_more_than_two_requests(orchestrator, conv_store):
+    """The decomposition is genuinely N-way, not hardcoded to exactly two
+    sub-requests -- both loops in _act_node/_observe_node iterate over the
+    full sub_plans/sub_results lists regardless of length."""
+    conv = conv_store.get_or_create("multi-intent-3")
+    out = orchestrator.handle_message(
+        conv, "I want to edit my avatar and cancel my subscription and download an invoice"
+    )
+
+    assert out.tools_used.count("search_faq") == 3
+    assert "avatar" in out.response.lower()
+    assert "cancel" in out.response.lower() or "subscription" in out.response.lower()
+    assert "invoice" in out.response.lower()
+
+
 def test_multi_intent_ambiguous_subrequest_short_circuits_whole_turn(orchestrator, conv_store):
     """If any sub-request resolves to a direct-response tool (clarification,
     refusal, escalation), that one should take over the whole turn rather
