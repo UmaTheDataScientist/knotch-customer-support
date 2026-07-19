@@ -303,7 +303,10 @@ the planner regularly hitting the iteration cap and force-escalating, which
 would signal the tool set or prompts need attention.
 
 **With two more weeks**: Postgres and pgvector instead of the in-memory store
-for real persistence and concurrent access; parallel tool execution for
-independent lookups; a larger labeled eval set with LLM-as-judge wired into
-CI instead of the current rule-based scoring; a human-in-the-loop review
-queue for `escalate_to_human` cases.
+for real persistence and concurrent access; a larger labeled eval set with
+LLM-as-judge wired into CI instead of the current rule-based scoring; a
+"Pending Reviews" panel in the dev UI so the human-in-the-loop
+approve/reject flow is demoable end-to-end from one screen instead of
+needing curl or `/docs` (the backend for this already exists --
+`GET /reviews`, `POST /reviews/{id}/approve`, `POST /reviews/{id}/reject` --
+it's only the UI side that's missing).
