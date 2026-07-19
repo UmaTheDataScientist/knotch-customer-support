@@ -104,6 +104,48 @@ Every message goes through two agents:
      fails, loop back to Plan (capped at 2 retries) instead of looping
      forever.
 
+```
+User message
+     |
+     v
+Compliance Agent --unsafe--> refuse (source = compliance)
+     |
+    safe
+     |
+     v
+ LangGraph main-agent loop (per conversation, checkpointed)
++------------------------------------------------+
+|Plan (1+ sub-requests, one tool each)           |
+|  |                                             |
+|  v                                             |
+|Act (run each sub-request's tool, in order;     |
+|     a clarification/refuse/escalation short-   |
+|     circuits the rest)                         |
+|  |                                             |
+|  v                                             |
+|Observe (turn each result into an answer,       |
+|         combine if more than one sub-request)  |
+|  |                                             |
+|  v                                             |
+|Verify (addresses question? grounded?           |
+|        no leaked internals?)                   |
+|  |                                             |
+|  +--- fails (<= 2 retries) ---> back to Plan   |
+|  |                                             |
+| passes                                         |
+|  |                                             |
+|  v                                             |
+|Finalize (strip markdown, mark done)            |
++------------------------------------------------+
+     |
+     v
+ChatMessageOut  (full step-by-step trace at GET /conversations/{id}/trace)
+```
+
+If any sub-request in Act resolves to `ask_user_clarification`, `refuse`, or
+`escalate_to_human`, that one short-circuits the rest of the loop for this
+turn rather than getting blended with an unrelated answer.
+
 This is built as an explicit LangGraph state machine. Each step above is a
 node, with a real conditional edge for the retry loop, rather than a single
 function with a hidden while-loop. That makes the two safety bounds (max
