@@ -12,7 +12,7 @@ from app.models.schemas import ErrorResponse
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(
-    title="Multi-Tool Customer Support Agent",
+    title="Knotch Customer Support Agent",
     description="Plan -> Act -> Observe -> Verify agent with a Compliance Agent guardrail.",
     version="0.1.0",
 )
