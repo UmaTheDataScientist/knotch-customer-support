@@ -46,12 +46,13 @@ class EmbeddingIndex:
         to_embed: list[FAQItem] = []
         hashes: dict[str, str] = {}
 
+        embed_model_id = self._llm.embed_model_id
         for item in indexable:
             text = item.embedding_text()
             h = _content_hash(text)
             hashes[item.id] = h
             cached = self._cache.get(item.id)
-            if cached and cached.get("hash") == h:
+            if cached and cached.get("hash") == h and cached.get("embed_model") == embed_model_id:
                 self._vectors[item.id] = np.array(cached["vector"], dtype=np.float32)
             else:
                 to_embed.append(item)
@@ -62,7 +63,7 @@ class EmbeddingIndex:
             vectors = self._llm.embed([i.embedding_text() for i in to_embed])
             for item, vec in zip(to_embed, vectors):
                 self._vectors[item.id] = np.array(vec, dtype=np.float32)
-                self._cache[item.id] = {"hash": hashes[item.id], "vector": vec}
+                self._cache[item.id] = {"hash": hashes[item.id], "vector": vec, "embed_model": embed_model_id}
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
             self._cache_path.write_text(json.dumps(self._cache))
 

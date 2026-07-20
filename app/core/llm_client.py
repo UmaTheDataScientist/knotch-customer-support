@@ -99,6 +99,19 @@ class LLMClient(ABC):
     def embed(self, texts: list[str]) -> list[list[float]]:
         ...
 
+    @property
+    @abstractmethod
+    def embed_model_id(self) -> str:
+        """Identifies which embedding source/model produced a vector.
+
+        Used by EmbeddingIndex to invalidate cached vectors when the
+        embedding source changes (e.g. switching LLM_PROVIDER between
+        `fake` and `openai`), since vectors from different models/dimensions
+        are not comparable and mixing them corrupts cosine similarity or
+        crashes on a shape mismatch.
+        """
+        ...
+
 
 class OpenAILLMClient(LLMClient):
     def __init__(self, settings: Settings):
@@ -131,6 +144,10 @@ class OpenAILLMClient(LLMClient):
     def embed(self, texts: list[str]) -> list[list[float]]:
         resp = self._client.embeddings.create(model=self._embed_model, input=texts)
         return [d.embedding for d in resp.data]
+
+    @property
+    def embed_model_id(self) -> str:
+        return f"openai:{self._embed_model}"
 
 
 class AnthropicLLMClient(LLMClient):
@@ -175,6 +192,12 @@ class AnthropicLLMClient(LLMClient):
             )
         return self._embed_fallback.embed(texts)
 
+    @property
+    def embed_model_id(self) -> str:
+        if not self._embed_fallback:
+            return "anthropic:no-embed-fallback"
+        return self._embed_fallback.embed_model_id
+
 
 class FakeLLMClient(LLMClient):
     """Deterministic, network-free client used in unit/integration tests and
@@ -197,6 +220,10 @@ class FakeLLMClient(LLMClient):
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [self._hash_embed(t) for t in texts]
+
+    @property
+    def embed_model_id(self) -> str:
+        return "fake:hash-4096"
 
     _STOPWORDS = {
         "a", "an", "the", "is", "it", "to", "do", "i", "my", "how", "can", "are",
@@ -222,6 +249,13 @@ class FakeLLMClient(LLMClient):
     # -- rule-based routing, mirrors what a real model would decide -------
     _INJECTION_HINTS = ("ignore previous", "ignore all previous", "disregard all prior", "system prompt", "you are now")
     _OFF_TOPIC_HINTS = ("poem", "pirate", "weather", "joke", "sing a song", "trivia")
+    _CATEGORY_OVERVIEW_HINTS = ("options do you support", "overview of")
+    _KNOWN_CATEGORIES = (
+        "billing", "security", "profile", "privacy", "subscription", "notifications",
+        "troubleshooting", "developer", "settings", "account_lifecycle", "data_recovery",
+        "security_incident",
+    )
+    _GENERAL_KNOWLEDGE_HINTS = ("rule of thumb", "conceptually", "in general,")
 
     @classmethod
     def _route(cls, system: str, user_text: str, json_mode: bool) -> str:
@@ -259,6 +293,33 @@ class FakeLLMClient(LLMClient):
                                 "tool": "escalate_to_human",
                                 "tool_args": {"reason": "requires human authority beyond FAQ scope", "transcript": user_text},
                                 "reasoning": "no FAQ entry covers this; genuinely needs a human",
+                            }
+                        ]
+                    }
+                )
+            if any(h in text_low for h in cls._CATEGORY_OVERVIEW_HINTS):
+                category = next((c for c in cls._KNOWN_CATEGORIES if c in text_low), "billing")
+                return json.dumps(
+                    {
+                        "sub_requests": [
+                            {
+                                "intent": "category_overview",
+                                "tool": "get_faq_by_category",
+                                "tool_args": {"category": category},
+                                "reasoning": "user wants an overview of a topic area, not one specific question",
+                            }
+                        ]
+                    }
+                )
+            if any(h in text_low for h in cls._GENERAL_KNOWLEDGE_HINTS):
+                return json.dumps(
+                    {
+                        "sub_requests": [
+                            {
+                                "intent": "general_knowledge",
+                                "tool": "general_knowledge_lookup",
+                                "tool_args": {"query": user_text},
+                                "reasoning": "support-adjacent general knowledge question with no plausible FAQ category coverage",
                             }
                         ]
                     }

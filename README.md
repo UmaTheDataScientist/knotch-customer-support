@@ -43,7 +43,7 @@ pip install -r requirements.txt
 # run the test suite (58 tests, all offline)
 pytest -q
 
-# run the eval harness (12 scenarios, all offline)
+# run the eval harness (15 scenarios, all offline)
 python eval/run_eval.py
 
 # start the API
@@ -83,7 +83,7 @@ matches the port your server is running on.
 - `tests/integration/test_conversations.py`, covers the four example
   interactions from the assignment doc, plus a few regression tests for real
   bugs found by testing against a live model, not just the offline suite.
-- `eval/run_eval.py`, automated eval harness, 12 scenarios, 100% pass rate.
+- `eval/run_eval.py`, automated eval harness, 15 scenarios, 100% pass rate.
 
 ## Architecture
 
@@ -192,6 +192,24 @@ testing to surface verbatim as the top match for realistic phrasings of the
 question. That's corrected to real guidance in the data itself, since no
 amount of query-side normalization fixes a broken answer.
 
+A second live-model bug turned up the same way: `general_knowledge_lookup`
+exists precisely for support-adjacent questions phrased generally rather than
+as a literal "how do I use your product" question (e.g. "what's a strong rule
+of thumb for password hygiene", "what is two-factor authentication,
+conceptually"). The Compliance Agent's original prompt defined off-topic
+broadly enough ("unrelated to account/product support") that the live model
+classified both as off-topic and refused them before the main agent ever got
+a chance to route to that tool -- `general_knowledge_lookup` was effectively
+dead code for anything not phrased as a literal product-usage question. Fixed
+by adding an explicit carve-out to `COMPLIANCE_SYSTEM_PROMPT`
+(`app/agents/prompts.py`) distinguishing "off-topic" (subject matter
+unrelated to accounts/security/billing/product) from "on-topic but phrased
+conceptually" (safe, and exactly what `general_knowledge_lookup` is for).
+Caught because `eval/dataset.jsonl` originally had zero coverage for that
+tool; two regression cases (`general_knowledge_1`, `general_knowledge_2`) are
+now in the eval set, plus one for `get_faq_by_category`
+(`category_overview_1`), which had the same gap.
+
 ## Bonus points implemented
 
 The assignment lists 11 optional bonuses and says to pick a few rather than
@@ -212,10 +230,11 @@ numbering:
   single escalation sub-request still short-circuits the rest of the plan
   *before* anything runs, preserving the cost-saving behavior that predates
   parallelism.
-- **#5, eval harness.** `eval/dataset.jsonl` (13 scenarios: happy path,
-  ambiguous, off-topic, malicious, multi-turn, escalation, status checks)
-  scored by `eval/run_eval.py` against source accuracy, tool-use accuracy,
-  and guardrail success rate. Currently 100% across all three, offline.
+- **#5, eval harness.** `eval/dataset.jsonl` (15 scenarios: happy path,
+  ambiguous, off-topic, malicious, multi-turn, escalation, category overview,
+  general knowledge) scored by `eval/run_eval.py` against source accuracy,
+  tool-use accuracy, and guardrail success rate. Currently 100% across all
+  three, offline.
 - **#9, idempotent embedding management.** `EmbeddingIndex.build()` hashes
   each item's embedding text (`sha256`) and only re-embeds rows whose hash
   actually changed, verified by building twice and checking `reused` vs

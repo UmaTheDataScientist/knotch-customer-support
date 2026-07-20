@@ -10,3 +10,6 @@
 {"id": "multi_turn_1", "category": "multi_turn", "turns": ["x", "i forgot my password"], "expect_source": "faq", "expect_tools_any": ["search_faq"]}
 {"id": "security_1", "category": "faq", "turns": ["my account has been compromised, please help"], "expect_source": "faq", "expect_tools_any": ["search_faq"]}
 {"id": "escalation_1", "category": "escalation", "turns": ["I want to speak to a manager about pursuing legal action against you"], "expect_source": "escalation", "expect_tools_any": ["escalate_to_human"]}
+{"id": "category_overview_1", "category": "faq", "turns": ["What billing options do you support?"], "expect_source": "faq", "expect_tools_any": ["get_faq_by_category"]}
+{"id": "general_knowledge_1", "category": "general_knowledge", "turns": ["What's a strong general rule of thumb for password hygiene across different sites?"], "expect_source": "general_knowledge", "expect_tools_any": ["general_knowledge_lookup"]}
+{"id": "general_knowledge_2", "category": "general_knowledge", "turns": ["What is two-factor authentication, conceptually?"], "expect_source": "general_knowledge", "expect_tools_any": ["general_knowledge_lookup"]}
