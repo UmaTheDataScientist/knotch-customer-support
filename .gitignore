@@ -4,6 +4,7 @@ __pycache__/
 .env
 data/embedding_cache.json
 eval/eval_embedding_cache.json
+eval/faq_coverage_embedding_cache.json
 traces/
 .pytest_cache/
 *.egg-info/

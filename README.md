@@ -223,7 +223,13 @@ numbering:
   reviewer inspect the queued plan and actually resume or reject it. The gate
   is opt-in (only active when a `ReviewQueue` is wired in), so a caller with
   no reviewer configured gets the old immediate-execution behavior
-  unchanged.
+  unchanged. Honest limitation: there's no notification mechanism once a
+  review is resolved -- the resolution is appended to the conversation's
+  history, but nothing pushes it back to the original requester (no
+  websocket, polling, or email). They'd only see it by checking back on
+  that same conversation. `escalate_to_human` itself is also a pure mock
+  per the assignment's own spec -- its "ticket_id" is a hardcoded string,
+  identical on every call, not a real generated ticket.
 - **#9, idempotent embedding management.** `EmbeddingIndex.build()` hashes
   each item's embedding text (`sha256`) and only re-embeds rows whose hash
   actually changed, verified by building twice and checking `reused` vs
@@ -268,6 +274,17 @@ worth building along the way:
 - **Two small diagnostic scripts** in `scripts/`. One confirms a real API key
   works with exactly 2 calls, the other inspects what actually got loaded from
   `.env` without ever printing the secret.
+- **`eval/faq_coverage_check.py`** -- sends every indexed KB question through
+  the real agent, verbatim, and checks whether it correctly retrieves its
+  own answer via `search_faq` rather than getting misrouted to a different
+  tool. This is what surfaced that a few security-flavored questions
+  (account compromise, lost data) were getting pulled toward
+  `escalate_to_human` instead of the FAQ's already-documented self-service
+  answer -- the same root pattern as the "site slow" and "account locked"
+  bugs, just caught systematically across the whole dataset instead of one
+  case at a time. Costs real API calls to run meaningfully (~4 calls x 32
+  questions against a real key); the offline fake-client run is a
+  structural smoke test only, since it can't judge real routing quality.
 - **Retry logic that skips retrying errors that can never succeed** (bad key,
   malformed request) instead of wasting 3 attempts on something guaranteed to
   fail every time.
