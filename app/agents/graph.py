@@ -49,18 +49,20 @@ from app.tools.definitions import Tool
 # turn -- see module docstring.
 _DIRECT_RESPONSE_TOOLS = {"ask_user_clarification", "refuse", "escalate_to_human"}
 
-# Deterministic fast path for password/login/account-access messages: the
-# plan prompt already instructs the LLM to try search_faq first for exactly
-# this category (there's a real FAQ entry for it), but live testing found
-# the model repeatedly overrides that instruction anyway -- urgent-sounding
-# phrasing ("someone changed my password," "I can't access my account")
-# gets judged as needing immediate human escalation, skipping the FAQ
-# entirely. Rather than continue tuning prompt wording against a judgment
-# call that keeps going the wrong way, this removes the judgment call: on
-# the first plan attempt only, these messages always route to search_faq,
-# no LLM decision involved. If that answer turns out to be wrong for the
-# situation, verification can still fail it and the normal replan (with the
-# LLM free to choose escalate_to_human) takes over from there.
+# Safety net for password/login/account-access messages: live testing found
+# the model sometimes judges urgent-sounding phrasing ("someone changed my
+# password," "I can't access my account") as needing immediate human
+# escalation, skipping the FAQ entirely even though a real entry exists for
+# it. An earlier version pre-empted this by skipping planning altogether --
+# any message matching these patterns went straight to search_faq, no LLM
+# judgment involved. That was too blunt: the same bare-word match on
+# "password" also caught purely conceptual questions ("what's a strong rule
+# of thumb for password hygiene?"), permanently overriding a plan that was
+# already correct (general_knowledge_lookup) -- caught by
+# `eval/dataset.jsonl`'s general_knowledge_1 case. This now only fires
+# *after* the plan is made, and only overrides an actual escalate_to_human
+# choice (the specific failure mode it exists to catch), and only when the
+# FAQ genuinely has coverage -- see _avoid_premature_escalation below.
 _PASSWORD_OR_LOGIN_PATTERNS = [
     re.compile(r"\bpassword\b", re.I),
     re.compile(r"\blog(ged)?[\s-]?in\b", re.I),
@@ -74,6 +76,39 @@ _PASSWORD_OR_LOGIN_PATTERNS = [
 
 def _is_password_or_login_related(message: str) -> bool:
     return any(pattern.search(message) for pattern in _PASSWORD_OR_LOGIN_PATTERNS)
+
+
+def _avoid_premature_escalation_for_password_login(
+    sub_plans: list[dict[str, Any]], search_faq_tool: Optional["Tool"], user_message: str
+) -> list[dict[str, Any]]:
+    """Post-plan safety net: if the plan escalated a password/login/account-
+    access message to a human, but the FAQ actually has coverage for it,
+    try the FAQ first instead. Uses the standard retrieval bar (any real
+    match), not the stricter bar in _force_search_faq_first -- the question
+    here is "should this be tried against the FAQ before bothering a human,"
+    not "does this fully answer a conceptual question," so a looser match is
+    the right call.
+    """
+    if search_faq_tool is None or not _is_password_or_login_related(user_message):
+        return sub_plans
+    adjusted = []
+    for sp in sub_plans:
+        if sp.get("tool") == "escalate_to_human":
+            try:
+                probe = search_faq_tool.run(query=user_message)
+                has_match = bool(probe.output.get("matches"))
+            except Exception:  # noqa: BLE001 - a failed probe must not block planning
+                has_match = False
+            if has_match:
+                sp = dict(sp)
+                sp["tool"] = "search_faq"
+                sp["tool_args"] = {"query": user_message}
+                sp["reasoning"] = (
+                    "Password/login-related message was escalated, but the FAQ has real "
+                    f"coverage for it -- trying that first (original reasoning: {sp.get('reasoning', 'n/a')})"
+                )
+        adjusted.append(sp)
+    return adjusted
 
 
 # Deterministic fast path for messages too short/vague to carry any real
@@ -102,9 +137,28 @@ def _is_too_vague_to_act_on(message: str) -> bool:
     return len(stripped) <= 3 or stripped.lower() in _VAGUE_LITERALS
 
 
-def _force_search_faq_first(sub_plans: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """First-attempt structural override: rewrite any general_knowledge_lookup
-    sub-plan into a search_faq call instead.
+# A topically-related FAQ entry (e.g. the password-guidelines entry for a
+# "password hygiene" question) can clear the normal retrieval bar
+# (`Settings.faq_min_score`, 0.15) without actually answering a conceptual
+# question -- retrieval relevance and "this fully answers what was asked"
+# are different things, and only the second one justifies overriding the
+# planner's own tool choice below. Measured against the KB (see
+# `eval/dataset.jsonl`'s general_knowledge_1/2 vs the "site is slow" case):
+# a literal restatement of an FAQ entry scores ~0.40, while a merely
+# adjacent-topic conceptual question scores ~0.24-0.30. 0.35 separates them
+# on today's data; this is a heuristic tuned against the current embedding
+# source; a threshold like this doesn't have a principled "true" value and
+# would need re-checking if the KB or embedding model changes materially.
+_FORCE_SEARCH_FAQ_MIN_SCORE = 0.35
+
+
+def _force_search_faq_first(
+    sub_plans: list[dict[str, Any]], search_faq_tool: Optional["Tool"]
+) -> list[dict[str, Any]]:
+    """First-attempt check: before trusting a general_knowledge_lookup plan,
+    actually query the FAQ. Only route to search_faq if it has a strong
+    match (score >= _FORCE_SEARCH_FAQ_MIN_SCORE); otherwise leave the
+    original plan alone.
 
     This is the same bug class as the escalate_to_human tiebreaker (commit
     4247326: "site is slow" was routing to a competing tool instead of the
@@ -113,27 +167,44 @@ def _force_search_faq_first(sub_plans: list[dict[str, Any]]) -> list[dict[str, A
     judgment call the model doesn't reliably honor -- "is the site down?"
     reads as a live-status question rather than a literal match for the
     KB's "why is the site slow today?" entry, so the planner keeps picking
-    general_knowledge_lookup over search_faq for phrasings like it. Rather
-    than tune the prompt a third time, the judgment call is removed: on the
-    first attempt, general_knowledge_lookup is never trusted outright, it's
-    always tried against the FAQ first. If the FAQ genuinely has nothing,
-    the resulting "couldn't find" response fails verification and replans,
-    where general_knowledge_lookup is available again (see the "IMPORTANT:
-    you already tried this" system message in _plan_node).
+    general_knowledge_lookup over search_faq for phrasings like it.
+
+    An earlier version of this rewrote general_knowledge_lookup into
+    search_faq unconditionally, on the theory that a genuinely FAQ-less
+    question would fail verification and replan back to
+    general_knowledge_lookup. In practice, a *topically related but not
+    actually answering* FAQ entry (e.g. "what is 2FA, conceptually?"
+    matching the "enable 2FA" how-to entry) could clear the normal
+    retrieval bar and pass verification anyway, permanently starving
+    general_knowledge_lookup for exactly the conceptual questions it exists
+    for -- caught by `eval/dataset.jsonl`'s general_knowledge_1/2 cases.
+    Requiring a stronger match here (rather than any match at all) fixes
+    that while still catching the original "site is slow" case.
     """
-    forced = []
+    if search_faq_tool is None:
+        return sub_plans
+    checked = []
     for sp in sub_plans:
         if sp.get("tool") == "general_knowledge_lookup":
-            sp = dict(sp)
             query = (sp.get("tool_args") or {}).get("query") or ""
-            sp["tool"] = "search_faq"
-            sp["tool_args"] = {"query": query}
-            sp["reasoning"] = (
-                "Forced search_faq before general_knowledge_lookup on the first attempt "
-                f"(original plan reasoning: {sp.get('reasoning', 'n/a')})"
-            )
-        forced.append(sp)
-    return forced
+            try:
+                probe = search_faq_tool.run(query=query)
+                matches = probe.output.get("matches") or []
+                has_strong_match = any(
+                    m.get("score", 0.0) >= _FORCE_SEARCH_FAQ_MIN_SCORE for m in matches
+                )
+            except Exception:  # noqa: BLE001 - a failed probe must not block planning
+                has_strong_match = False
+            if has_strong_match:
+                sp = dict(sp)
+                sp["tool"] = "search_faq"
+                sp["tool_args"] = {"query": query}
+                sp["reasoning"] = (
+                    "Checked the FAQ before trusting general_knowledge_lookup on the first "
+                    f"attempt and found a strong match (original plan reasoning: {sp.get('reasoning', 'n/a')})"
+                )
+        checked.append(sp)
+    return checked
 
 
 class AgentState(TypedDict, total=False):
@@ -247,19 +318,6 @@ class SupportAgentGraph:
                     }
                 ]
                 trace.detail["forced"] = True
-            elif state["iteration"] == 1 and _is_password_or_login_related(state["user_message"]):
-                sub_plans = [
-                    {
-                        "intent": "password_or_login_related",
-                        "tool": "search_faq",
-                        "tool_args": {"query": state["user_message"]},
-                        "reasoning": (
-                            "Deterministic fast path: password/login/account-access requests "
-                            "always search the FAQ first, no model judgment call involved."
-                        ),
-                    }
-                ]
-                trace.detail["fast_path"] = "password_or_login"
             elif (
                 state["iteration"] == 1
                 and not self._conv.pending_clarification
@@ -319,7 +377,10 @@ class SupportAgentGraph:
                     trace, result.prompt_tokens, result.completion_tokens, result.estimated_cost_usd
                 )
             if state["iteration"] == 1:
-                sub_plans = _force_search_faq_first(sub_plans)
+                sub_plans = _force_search_faq_first(sub_plans, self._tools.get("search_faq"))
+                sub_plans = _avoid_premature_escalation_for_password_login(
+                    sub_plans, self._tools.get("search_faq"), state["user_message"]
+                )
             trace.detail["sub_plans"] = sub_plans
             trace.detail["prompt_version"] = PROMPT_VERSION
         state["sub_plans"] = sub_plans

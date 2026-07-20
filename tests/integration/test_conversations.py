@@ -292,14 +292,12 @@ def test_plan_call_never_duplicates_the_current_user_message(recording_orchestra
     last user message, not the full message shape -- this test inspects
     the actual messages list instead.
 
-    Uses a billing follow-up rather than a password one deliberately: the
-    plan node has a deterministic fast path for password/login/account-access
-    messages (see _is_password_or_login_related in app/agents/graph.py) that
-    skips the LLM plan call entirely, which would make this test assert
-    nothing about the real regression it targets. The setup turn ("x") also
-    skips the LLM plan call now, via the separate too-vague-to-act-on fast
-    path (_is_too_vague_to_act_on) -- only the second turn's plan call is
-    expected to be recorded here."""
+    Uses a billing follow-up rather than a password one: it's a plain,
+    unambiguous plan call with no fast path or post-plan override involved,
+    keeping the assertion focused on the message-shape regression itself.
+    The setup turn ("x") skips the LLM plan call entirely, via the
+    too-vague-to-act-on fast path (_is_too_vague_to_act_on) -- only the
+    second turn's plan call is expected to be recorded here."""
     conv = conv_store.get_or_create("dup-check-1")
     recording_orchestrator.handle_message(conv, "x")
     recording_orchestrator.handle_message(conv, "i want to change my billing plan")
@@ -315,13 +313,31 @@ def test_plan_call_never_duplicates_the_current_user_message(recording_orchestra
     )
 
 
-def test_force_search_faq_first_rewrites_general_knowledge_lookup():
-    """Unit test for the standalone override, isolated from any LLM/tool
+class _StubSearchFaqTool:
+    """Minimal stand-in for the real search_faq Tool: returns a fixed score
+    for every query, so the override's threshold logic can be tested without
+    a real embedding index."""
+
+    def __init__(self, score: float):
+        self._score = score
+
+    def run(self, **kwargs):
+        from app.tools.definitions import ToolResult
+
+        return ToolResult(
+            tool_name="search_faq",
+            output={"matches": [{"question": "q", "answer": "a", "category": "c", "score": self._score}]},
+        )
+
+
+def test_force_search_faq_first_rewrites_general_knowledge_lookup_on_strong_match():
+    """Unit test for the standalone override, isolated from any LLM/graph
     plumbing: a general_knowledge_lookup sub-plan becomes a search_faq call
-    with the same query preserved, and any other tool passes through
-    untouched (e.g. a sub-plan that already picked search_faq, or one
-    the planner correctly sent to ask_user_clarification)."""
-    from app.agents.graph import _force_search_faq_first
+    with the same query preserved when the FAQ has a strong match, and any
+    other tool passes through untouched (e.g. a sub-plan that already picked
+    search_faq, or one the planner correctly sent to ask_user_clarification).
+    """
+    from app.agents.graph import _FORCE_SEARCH_FAQ_MIN_SCORE, _force_search_faq_first
 
     sub_plans = [
         {
@@ -338,11 +354,36 @@ def test_force_search_faq_first_rewrites_general_knowledge_lookup():
         },
     ]
 
-    forced = _force_search_faq_first(sub_plans)
+    forced = _force_search_faq_first(sub_plans, _StubSearchFaqTool(score=_FORCE_SEARCH_FAQ_MIN_SCORE))
 
     assert forced[0]["tool"] == "search_faq"
     assert forced[0]["tool_args"] == {"query": "is the site down?"}
     assert forced[1] == sub_plans[1]
+
+
+def test_force_search_faq_first_leaves_general_knowledge_lookup_on_weak_match():
+    """The override must not fire on a merely topically-adjacent FAQ match
+    (score below the threshold) -- that's exactly the bug that broke the
+    general_knowledge_1/2 eval cases (see the docstring on
+    _force_search_faq_first): a "what is 2FA, conceptually?" question finds
+    the FAQ's "enable 2FA" how-to entry on topic overlap alone, but that
+    entry doesn't actually answer a conceptual question."""
+    from app.agents.graph import _FORCE_SEARCH_FAQ_MIN_SCORE, _force_search_faq_first
+
+    sub_plans = [
+        {
+            "intent": "general_knowledge",
+            "tool": "general_knowledge_lookup",
+            "tool_args": {"query": "what is two-factor authentication, conceptually?"},
+            "reasoning": "support-adjacent general knowledge question",
+        }
+    ]
+
+    forced = _force_search_faq_first(
+        sub_plans, _StubSearchFaqTool(score=_FORCE_SEARCH_FAQ_MIN_SCORE - 0.01)
+    )
+
+    assert forced == sub_plans
 
 
 def test_is_the_site_down_hits_faq_troubleshooting_entry_not_general_knowledge(orchestrator, conv_store):

@@ -40,7 +40,7 @@ python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# run the test suite (58 tests, all offline)
+# run the test suite (63 tests, all offline)
 pytest -q
 
 # run the eval harness (15 scenarios, all offline)
@@ -170,33 +170,26 @@ Compliance Agent --unsafe--> refuse (source = compliance)
 ChatMessageOut  (full step-by-step trace at GET /conversations/{id}/trace)
 ```
 
-If any sub-request in Act resolves to `ask_user_clarification`, `refuse`, or
-`escalate_to_human`, that one short-circuits the rest of the loop for this
-turn rather than getting blended with an unrelated answer.
+**Key decisions:**
 
-This is built as an explicit LangGraph state machine. Each step above is a
-node, with a real conditional edge for the retry loop, rather than a single
-function with a hidden while-loop. That makes the two safety bounds (max
-iterations, max verification retries) visible and testable instead of buried
-in control flow, and every step logs its own trace entry, so a bad
-conversation can be debugged by reading `GET /conversations/{id}/trace`
-instead of guessing. Each conversation also gets its own LangGraph
-checkpointer (`app/core/state.py`), so every node transition is a real
-persisted snapshot, inspectable via `get_state_history()`, not just an
-in-memory pass-through.
-
-The compliance check running before the main agent, not in parallel or after,
-is deliberate. It avoids wasting a planning/retrieval call on a message
-that's about to be refused anyway, and it means nothing the main agent
-produces is ever shown to a user before a policy check has happened.
-
-Multi-request messages are handled by decomposing the plan step's output into
-a list of sub-requests instead of a single tool call, then executing each one
-and combining the answers (`app/agents/graph.py`). If any sub-request resolves
-to a clarification question, a refusal, or an escalation, that one takes over
-the whole turn instead of being silently blended with an unrelated answer,
-since mixing "I need more detail" with a confident answer in the same reply
-would be confusing and is arguably worse than just asking.
+- **LangGraph state machine, not a hidden while-loop.** Each step above is a
+  node with a real conditional edge for the retry loop, so the two safety
+  bounds (max iterations, max verification retries) are visible and testable
+  instead of buried in control flow. Every step logs its own trace entry
+  (`GET /conversations/{id}/trace`).
+- **Checkpointed per conversation.** Each conversation gets its own LangGraph
+  checkpointer (`app/core/state.py`) -- every node transition is a real
+  persisted snapshot, inspectable via `get_state_history()`, not just an
+  in-memory pass-through.
+- **Compliance runs before the main agent**, not in parallel or after --
+  avoids wasting a planning/retrieval call on a message that's about to be
+  refused, and guarantees nothing the main agent produces is shown before a
+  policy check has happened.
+- **Multi-request messages are decomposed** into sub-requests (one tool
+  each), executed, and combined into one reply. If any sub-request resolves
+  to a clarification, refusal, or escalation, that one takes over the whole
+  turn instead of being silently blended with a confident answer to a
+  different part of the message.
 
 Exactly the 6 required tools live in `app/tools/definitions.py` -- no extras:
 
@@ -213,43 +206,27 @@ Exactly the 6 required tools live in `app/tools/definitions.py` -- no extras:
   off-topic requests.
 
 Two additional tools (`check_system_status`, `lookup_account_status`) were
-tried and then removed; see "Removed, and why" below. The FAQ knowledge
-base is embedded and cached (`app/retrieval/`), so re-running ingestion only
-re-embeds rows that actually changed. Conversation history is kept in memory
-per `conversation_id`, with older turns compressed into a running summary
-instead of growing the context forever.
+tried and then removed; see "Removed, and why" in Extras below. The FAQ
+knowledge base is embedded and cached (`app/retrieval/`), so re-running
+ingestion only re-embeds rows that actually changed. Conversation history is
+kept in memory per `conversation_id`, with older turns compressed into a
+running summary instead of growing the context forever.
 
-The provided FAQ dataset is intentionally messy. A few entries needed a
-judgment call, documented in `app/retrieval/knowledge_base.py`: `"x"` is
-excluded from the *searchable* index since its answer is itself an
-instruction to ask for clarification, not a fact, indexing it would make it
-falsely match almost any short query, and `ask_user_clarification` already
-handles that case dynamically. `"help!!! my account is locked"` has a real,
-legitimate question, just noisily formatted, so the question is kept with a
-normalized version used only for the embedding text. Its stored *answer*,
-though, was separately broken, not just noisy ("pls help me unlock it
-ASAP!!!" -- another frustrated statement, not guidance), confirmed via live
-testing to surface verbatim as the top match for realistic phrasings of the
-question. That's corrected to real guidance in the data itself, since no
-amount of query-side normalization fixes a broken answer.
+### Knowledge base cleaning
 
-A second live-model bug turned up the same way: `general_knowledge_lookup`
-exists precisely for support-adjacent questions phrased generally rather than
-as a literal "how do I use your product" question (e.g. "what's a strong rule
-of thumb for password hygiene", "what is two-factor authentication,
-conceptually"). The Compliance Agent's original prompt defined off-topic
-broadly enough ("unrelated to account/product support") that the live model
-classified both as off-topic and refused them before the main agent ever got
-a chance to route to that tool -- `general_knowledge_lookup` was effectively
-dead code for anything not phrased as a literal product-usage question. Fixed
-by adding an explicit carve-out to `COMPLIANCE_SYSTEM_PROMPT`
-(`app/agents/prompts.py`) distinguishing "off-topic" (subject matter
-unrelated to accounts/security/billing/product) from "on-topic but phrased
-conceptually" (safe, and exactly what `general_knowledge_lookup` is for).
-Caught because `eval/dataset.jsonl` originally had zero coverage for that
-tool; two regression cases (`general_knowledge_1`, `general_knowledge_2`) are
-now in the eval set, plus one for `get_faq_by_category`
-(`category_overview_1`), which had the same gap.
+The provided FAQ dataset is intentionally messy. Two judgment calls, made in
+`app/retrieval/knowledge_base.py`:
+
+- **`"x"`** is excluded from the *searchable* index -- its answer is an
+  instruction to ask for clarification, not a fact, so indexing it would make
+  it falsely match almost any short query. `ask_user_clarification` already
+  handles that case dynamically.
+- **`"help!!! my account is locked"`** has a real question, just noisily
+  formatted -- kept, with a normalized version used only for the embedding
+  text. Its stored *answer* ("pls help me unlock it ASAP!!!") was separately
+  broken, not just noisy, and live testing confirmed it surfaced verbatim as
+  the top match. Corrected in the data itself, since no query-side
+  normalization fixes a broken answer.
 
 ### Meeting requirements 7-9 explicitly
 
@@ -266,9 +243,14 @@ it's stated directly here:
   `main.py`.
 - **Observability (req. 8)**: every plan/tool-call/observe/verify/replan
   step is logged as a structured `TraceStep` (`app/observability/tracer.py`),
-  retrievable per conversation via `GET /conversations/{id}/trace`. Each step
-  records its own latency, and, where an LLM call happened, prompt/completion
-  tokens and estimated cost; `ConversationTrace.total_cost_usd` sums these
+  retrievable per conversation via `GET /conversations/{id}/trace`, and shown
+  live in the dev UI. Each step records its own latency, and, where an LLM
+  call happened, prompt/completion tokens (the real `usage` field from
+  OpenAI/Anthropic, or a word-count estimate from the offline fake client)
+  and an estimated cost -- token counts times a static $/1K-token rate table
+  per model (`_COST_PER_1K` in `app/core/llm_client.py`), not live provider
+  billing, so it's directionally useful for relative cost-awareness rather
+  than accounting-accurate. `ConversationTrace.total_cost_usd` sums these
   across the whole conversation.
 - **Abstractions (req. 9)**: `app/core/llm_client.py` is the only place that
   knows about OpenAI, Anthropic, or the offline fake client -- swapping
@@ -346,9 +328,31 @@ worth building along the way:
 - **A local dev chat UI** (`devtools/chat_ui.html`), a self-contained HTML
   file with no build step or dependencies. A chat window on one side, a live
   trace of every plan/act/observe/verify step on the other, updating after
-  each message. Not part of the graded API itself, built so the agent's
-  reasoning could be watched happen in real time instead of reading raw trace
-  JSON in a terminal.
+  each message -- including per-step latency, prompt/completion tokens, and
+  estimated cost, plus a running total for the whole conversation. Not part
+  of the graded API itself, built so the agent's reasoning could be watched
+  happen in real time instead of reading raw trace JSON in a terminal.
+- **A live-model regression in `general_knowledge_lookup` routing.** The
+  Compliance Agent's original prompt defined "off-topic" broadly enough that
+  it refused on-topic-but-conceptual questions ("what's a strong rule of
+  thumb for password hygiene?") before the main agent ever got a chance to
+  route them -- `general_knowledge_lookup` was effectively dead code for
+  anything not phrased as a literal product-usage question. Fixed with an
+  explicit carve-out in `COMPLIANCE_SYSTEM_PROMPT`; two regression cases
+  (`general_knowledge_1`, `general_knowledge_2`) are now in the eval set so
+  it can't silently regress again.
+- **The same tool got starved a second way, caught by the eval set itself.**
+  `_force_search_faq_first` and the password/login safety net
+  (`app/agents/graph.py`) both used to override the planner unconditionally
+  -- any topical word match (even "password" inside "password hygiene rule
+  of thumb") forced `search_faq`, regardless of whether the FAQ actually
+  answered the question. That silently broke `general_knowledge_1`/`_2`
+  (`eval/run_eval.py` dropped to 86.67%, then 93.33%, before this fix).
+  Both overrides now check the FAQ's actual match score before acting --
+  requiring a strong match for `_force_search_faq_first`, and only
+  overriding an `escalate_to_human` choice (not a correct
+  `general_knowledge_lookup` one) for the password/login case. Eval is back
+  to 15/15.
 - **`POST /conversations`, `GET /conversations`, and `GET /conversations/{id}/messages`**
   -- create a new conversation with a server-guaranteed-unique id, list every
   conversation currently in memory (with a preview), and fetch a
@@ -409,31 +413,37 @@ worth building along the way:
 
 ## How I'd evaluate this in production
 
-**Subjective quality** (helpfulness, tone, hallucination rate): LLM-as-judge
-against a rubric on a sample of real conversations, paired with periodic human
-spot-checks. The agreement rate between judge and human becomes its own
-metric to watch for judge drift.
+**Subjective quality** (helpfulness, tone, hallucination rate)
+- LLM-as-judge against a rubric, run on a sample of real conversations.
+- Periodic human spot-checks, with judge-vs-human agreement tracked as its
+  own metric to catch judge drift.
 
-**Objective metrics**: retrieval precision@k against a labeled query set;
-tool-call accuracy (did the planner pick the tool a human reviewer would
-have); per-step and end-to-end latency (`TraceStep.latency_ms`), broken out
-by tool; cost per conversation (`ConversationTrace.total_cost_usd`), with
-alerts on conversations that hit `max_verification_retries`, since those pay
-for extra LLM calls without necessarily resolving anything.
+**Objective metrics**
+- Retrieval precision@k against a labeled query set.
+- Tool-call accuracy: did the planner pick the tool a human reviewer would
+  have?
+- Latency: per-step and end-to-end (`TraceStep.latency_ms`), broken out by
+  tool.
+- Cost per conversation (`ConversationTrace.total_cost_usd`), with alerts on
+  conversations that hit `max_verification_retries` -- those pay for extra
+  LLM calls without necessarily resolving anything.
 
-**Failure modes to watch for**: the verify step itself hallucinating
-"grounded: true" for an ungrounded answer (needs human audits of a sample of
-`verified: true` responses, not just trusting the flag); the Compliance
-Agent producing false positives/negatives as phrasing gets more creative;
-retrieval drift if the KB changes but the embedding cache doesn't catch it;
-the planner regularly hitting the iteration cap and force-escalating, which
-would signal the tool set or prompts need attention.
+**Failure modes to watch for**
+- Verify hallucinating `grounded: true` on an ungrounded answer -- needs
+  human audits of a sample of `verified: true` responses, not just trusting
+  the flag.
+- Compliance Agent false positives/negatives as phrasing gets more creative.
+- Retrieval drift if the KB changes but the embedding cache doesn't catch it.
+- The planner regularly hitting the iteration cap and force-escalating --
+  a signal the tool set or prompts need attention.
 
-**With two more weeks**: Postgres and pgvector instead of the in-memory store
-for real persistence and concurrent access; a larger labeled eval set with
-LLM-as-judge wired into CI instead of the current rule-based scoring; if
-human-in-the-loop escalation approval turns out to matter in practice, build
-it properly next time -- a review queue with a UI to approve/reject from on
-day one, not bolted on afterward with no way to interact with it except
-curl or `/docs` (which is exactly what happened here, and exactly why it got
-pulled back out rather than shipped half-integrated).
+**With two more weeks**
+- Postgres + pgvector instead of the in-memory store, for real persistence
+  and concurrent access.
+- A larger labeled eval set with LLM-as-judge wired into CI, instead of the
+  current rule-based scoring.
+- If human-in-the-loop escalation approval turns out to matter in practice,
+  build it properly -- a review queue with a UI to approve/reject on day
+  one, not bolted on afterward with no way to interact with it except curl
+  or `/docs` (what happened here, and why it got pulled back out rather than
+  shipped half-integrated).
