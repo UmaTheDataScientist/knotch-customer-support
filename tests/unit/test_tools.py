@@ -40,32 +40,6 @@ def test_escalate_to_human_tool_returns_stub_ticket(scripted_llm, embedding_inde
     assert "ticket_id" in result.output
 
 
-def test_check_system_status_tool_reports_operational_by_default(scripted_llm, embedding_index, faq_items):
-    tools = _tools(scripted_llm, embedding_index, faq_items)
-    result = tools["check_system_status"].run(component=None)
-    assert result.output["status"] == "operational"
-
-
-def test_check_system_status_tool_reports_degraded_for_payments(scripted_llm, embedding_index, faq_items):
-    tools = _tools(scripted_llm, embedding_index, faq_items)
-    result = tools["check_system_status"].run(component="payments")
-    assert result.output["status"] == "degraded_performance"
-
-
-def test_lookup_account_status_tool_is_deterministic(scripted_llm, embedding_index, faq_items):
-    tools = _tools(scripted_llm, embedding_index, faq_items)
-    first = tools["lookup_account_status"].run(account_id="acct-123")
-    second = tools["lookup_account_status"].run(account_id="acct-123")
-    assert first.output["status"] == second.output["status"]
-    assert first.output["status"] in {"active", "locked", "pending_verification"}
-
-
-def test_lookup_account_status_tool_varies_by_account(scripted_llm, embedding_index, faq_items):
-    tools = _tools(scripted_llm, embedding_index, faq_items)
-    statuses = {tools["lookup_account_status"].run(account_id=f"acct-{i}").output["status"] for i in range(10)}
-    assert len(statuses) > 1, "expected some variation across different account ids"
-
-
 def test_tool_args_are_validated(scripted_llm, embedding_index, faq_items):
     tools = _tools(scripted_llm, embedding_index, faq_items)
     try:

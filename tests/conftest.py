@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.agents.orchestrator import SupportOrchestrator
 from app.config import Settings
 from app.core.llm_client import FakeLLMClient, LLMResult
-from app.core.review_queue import ReviewQueue
 from app.core.state import ConversationStore
 from app.retrieval.embeddings import EmbeddingIndex
 from app.retrieval.knowledge_base import load_faq_items
@@ -71,18 +70,6 @@ def recording_orchestrator(recording_llm, test_settings, faq_items, tmp_path):
     idx = EmbeddingIndex(recording_llm, cache_path=tmp_path / "recording_cache.json")
     idx.build(faq_items)
     return SupportOrchestrator(llm=recording_llm, settings=test_settings, index=idx, faq_items=faq_items)
-
-
-@pytest.fixture
-def review_queue():
-    return ReviewQueue()
-
-
-@pytest.fixture
-def orchestrator_with_review(scripted_llm, test_settings, embedding_index, faq_items, review_queue):
-    return SupportOrchestrator(
-        llm=scripted_llm, settings=test_settings, index=embedding_index, faq_items=faq_items, review_queue=review_queue
-    )
 
 
 @pytest.fixture

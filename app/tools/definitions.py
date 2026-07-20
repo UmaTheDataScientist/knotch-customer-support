@@ -53,16 +53,6 @@ class RefuseArgs(BaseModel):
     reason: str = Field(..., description="Why the request is being refused.")
 
 
-class CheckSystemStatusArgs(BaseModel):
-    component: Optional[str] = Field(
-        None, description="Optional specific component/service to check, e.g. 'api', 'payments'."
-    )
-
-
-class LookupAccountStatusArgs(BaseModel):
-    account_id: str = Field(..., description="The account identifier to look up, if the user has provided one.")
-
-
 @dataclass
 class ToolResult:
     tool_name: str
@@ -150,40 +140,6 @@ def build_tools(
     def _refuse(args: RefuseArgs) -> ToolResult:
         return ToolResult(tool_name="refuse", output={"reason": args.reason})
 
-    def _check_system_status(args: CheckSystemStatusArgs) -> ToolResult:
-        # Mock: a real implementation would call an internal status API
-        # (e.g. Statuspage/PagerDuty) or the same feed that powers a public
-        # status page. Deterministic here so tests don't flake: only the
-        # "payments" component is ever reported as degraded, everything
-        # else is operational.
-        component = (args.component or "all systems").lower()
-        degraded = "payment" in component
-        return ToolResult(
-            tool_name="check_system_status",
-            output={
-                "component": args.component or "all systems",
-                "status": "degraded_performance" if degraded else "operational",
-                "detail": (
-                    "We're seeing elevated latency on payments processing and are investigating."
-                    if degraded
-                    else "All systems are running normally."
-                ),
-            },
-        )
-
-    def _lookup_account_status(args: LookupAccountStatusArgs) -> ToolResult:
-        # Mock: a real implementation would query the account/user service.
-        # Deterministic hash-based stub so the same account_id always
-        # returns the same status in tests, without a real datastore.
-        import hashlib
-
-        bucket = int(hashlib.md5(args.account_id.encode()).hexdigest(), 16) % 4
-        status = ["active", "locked", "pending_verification", "active"][bucket]
-        return ToolResult(
-            tool_name="lookup_account_status",
-            output={"account_id": args.account_id, "status": status},
-        )
-
     def _get_faq_by_category(args: GetFaqByCategoryArgs) -> ToolResult:
         matches = [i for i in all_items if i.category == args.category]
         return ToolResult(
@@ -227,24 +183,6 @@ def build_tools(
             description="Refuse to answer due to policy violation, jailbreak attempt, or off-topic request.",
             args_schema=RefuseArgs,
             func=_refuse,
-        ),
-        "check_system_status": Tool(
-            name="check_system_status",
-            description=(
-                "Check current operational status of the platform or a specific component. "
-                "Use for questions like 'is the site down' or 'why is X slow today'."
-            ),
-            args_schema=CheckSystemStatusArgs,
-            func=_check_system_status,
-        ),
-        "lookup_account_status": Tool(
-            name="lookup_account_status",
-            description=(
-                "Look up whether a specific account is active, locked, or pending verification. "
-                "Only use when the user has provided an account identifier."
-            ),
-            args_schema=LookupAccountStatusArgs,
-            func=_lookup_account_status,
         ),
     }
     return tools

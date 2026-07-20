@@ -250,49 +250,15 @@ class FakeLLMClient(LLMClient):
                         ]
                     }
                 )
-            if ("compromised" in text_low or "hacked" in text_low) or ("lost" in text_low and "data" in text_low):
+            if any(p in text_low for p in ("speak to a manager", "legal action", "lawsuit", "file a complaint against")):
                 return json.dumps(
                     {
                         "sub_requests": [
                             {
-                                "intent": "security_incident",
+                                "intent": "requires_human_authority",
                                 "tool": "escalate_to_human",
-                                "tool_args": {"reason": "security-sensitive request", "transcript": user_text},
-                                "reasoning": "requires human judgment/authority",
-                            }
-                        ]
-                    }
-                )
-            tokens = set(text_low.replace("?", " ").replace(",", " ").split())
-            status_phrases = ("is the site down", "site down", "is it down", "outage", "everything down")
-            slow_words = {"slow", "sluggish", "lagging", "unresponsive"}
-            site_words = {"site", "app", "platform", "service", "everything"}
-            if any(p in text_low for p in status_phrases) or (tokens & slow_words and tokens & site_words):
-                component = "payments" if "payment" in text_low else None
-                return json.dumps(
-                    {
-                        "sub_requests": [
-                            {
-                                "intent": "status_check",
-                                "tool": "check_system_status",
-                                "tool_args": {"component": component},
-                                "reasoning": "user is asking about live operational status, not a static FAQ answer",
-                            }
-                        ]
-                    }
-                )
-            if "account" in text_low and (
-                "status" in text_low or "locked" in text_low or "active" in text_low
-            ) and any(ch.isdigit() for ch in text_low):
-                acct_id = "".join(ch for ch in text_low if ch.isalnum())
-                return json.dumps(
-                    {
-                        "sub_requests": [
-                            {
-                                "intent": "account_status_check",
-                                "tool": "lookup_account_status",
-                                "tool_args": {"account_id": acct_id},
-                                "reasoning": "user gave an account identifier and wants its current status",
+                                "tool_args": {"reason": "requires human authority beyond FAQ scope", "transcript": user_text},
+                                "reasoning": "no FAQ entry covers this; genuinely needs a human",
                             }
                         ]
                     }

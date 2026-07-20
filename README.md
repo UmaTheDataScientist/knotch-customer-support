@@ -40,10 +40,10 @@ python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# run the test suite (46 tests, all offline)
+# run the test suite (58 tests, all offline)
 pytest -q
 
-# run the eval harness (13 scenarios, all offline)
+# run the eval harness (12 scenarios, all offline)
 python eval/run_eval.py
 
 # start the API
@@ -83,7 +83,7 @@ matches the port your server is running on.
 - `tests/integration/test_conversations.py`, covers the four example
   interactions from the assignment doc, plus a few regression tests for real
   bugs found by testing against a live model, not just the offline suite.
-- `eval/run_eval.py`, automated eval harness, 13 scenarios, 100% pass rate.
+- `eval/run_eval.py`, automated eval harness, 12 scenarios, 100% pass rate.
 
 ## Architecture
 
@@ -170,8 +170,9 @@ the whole turn instead of being silently blended with an unrelated answer,
 since mixing "I need more detail" with a confident answer in the same reply
 would be confusing and is arguably worse than just asking.
 
-Six required tools plus two extra ones (`check_system_status`,
-`lookup_account_status`) live in `app/tools/definitions.py`. The FAQ knowledge
+Exactly the 6 required tools live in `app/tools/definitions.py` -- no extras.
+Two additional tools (`check_system_status`, `lookup_account_status`) were
+tried and then removed; see "Removed, and why" below. The FAQ knowledge
 base is embedded and cached (`app/retrieval/`), so re-running ingestion only
 re-embeds rows that actually changed. Conversation history is kept in memory
 per `conversation_id`, with older turns compressed into a running summary
@@ -194,7 +195,7 @@ amount of query-side normalization fixes a broken answer.
 ## Bonus points implemented
 
 The assignment lists 11 optional bonuses and says to pick a few rather than
-attempt all of them. Six are done here, matching the assignment's own
+attempt all of them. Five are done here, matching the assignment's own
 numbering:
 
 - **#1, LangGraph state machine with cycles and checkpointing.** Explicit
@@ -215,21 +216,6 @@ numbering:
   ambiguous, off-topic, malicious, multi-turn, escalation, status checks)
   scored by `eval/run_eval.py` against source accuracy, tool-use accuracy,
   and guardrail success rate. Currently 100% across all three, offline.
-- **#6, human-in-the-loop interrupt.** Any plan that includes
-  `escalate_to_human` pauses instead of executing immediately
-  (`app/core/review_queue.py`), the turn returns a "waiting on human
-  sign-off" response with a `pending_review_id`, and `GET /reviews`,
-  `POST /reviews/{id}/approve`, `POST /reviews/{id}/reject` let a (mocked)
-  reviewer inspect the queued plan and actually resume or reject it. The gate
-  is opt-in (only active when a `ReviewQueue` is wired in), so a caller with
-  no reviewer configured gets the old immediate-execution behavior
-  unchanged. Honest limitation: there's no notification mechanism once a
-  review is resolved -- the resolution is appended to the conversation's
-  history, but nothing pushes it back to the original requester (no
-  websocket, polling, or email). They'd only see it by checking back on
-  that same conversation. `escalate_to_human` itself is also a pure mock
-  per the assignment's own spec -- its "ticket_id" is a hardcoded string,
-  identical on every call, not a real generated ticket.
 - **#9, idempotent embedding management.** `EmbeddingIndex.build()` hashes
   each item's embedding text (`sha256`) and only re-embeds rows whose hash
   actually changed, verified by building twice and checking `reused` vs
@@ -239,16 +225,28 @@ numbering:
 
 Not implemented, for the record: #3 long-term memory, #4 cost-aware routing,
 #7 auth via `Depends`, #8 Postgres + pgvector, #10 async embedding ingestion
-via Celery.
+via Celery. #6 (human-in-the-loop interrupt) was actually built -- a full
+pause/approve/reject review queue with its own endpoints -- then removed.
+It added real complexity (a whole extra API surface, a new state machine
+branch, a queue with no UI to inspect it from) without a corresponding win
+clear enough to justify it this close to a deadline, and it wasn't reachable
+from the dev UI at all, which made it hard to demo or reason about
+end-to-end. Simpler to cut it than leave a half-integrated feature in.
 
 ## Extras beyond what the assignment asked for
 
 Things added that aren't on the assignment's bonus list at all, but seemed
 worth building along the way:
 
-- **Two extra tools**: `check_system_status` and `lookup_account_status`,
-  replacing a static "go check the status page" FAQ answer with something the
-  bot can actually check itself.
+- **Removed, and why**: `check_system_status` and `lookup_account_status`
+  were added early on, then removed. They created a real, recurring bug:
+  two extra tools competing with `search_faq` for topics the KB already
+  covered (account lockouts, "is it slow"), needing an ever-growing set of
+  tiebreaker instructions to stop the planner reaching for them instead of
+  the FAQ. Simplest fix was removing the competing tools entirely rather
+  than continuing to patch around the ambiguity -- the KB coverage check
+  below went from 29/32 to a clean 32/32 the moment they were gone, and the
+  tool surface now matches the assignment's spec exactly, 6 tools, no more.
 - **A fully offline LLM stand-in** (`FakeLLMClient`) that routes intents,
   classifies compliance verdicts, and answers questions with zero network
   calls. This is what lets the whole test suite and eval harness run free and
@@ -277,14 +275,16 @@ worth building along the way:
 - **`eval/faq_coverage_check.py`** -- sends every indexed KB question through
   the real agent, verbatim, and checks whether it correctly retrieves its
   own answer via `search_faq` rather than getting misrouted to a different
-  tool. This is what surfaced that a few security-flavored questions
-  (account compromise, lost data) were getting pulled toward
-  `escalate_to_human` instead of the FAQ's already-documented self-service
-  answer -- the same root pattern as the "site slow" and "account locked"
-  bugs, just caught systematically across the whole dataset instead of one
-  case at a time. Costs real API calls to run meaningfully (~4 calls x 32
-  questions against a real key); the offline fake-client run is a
-  structural smoke test only, since it can't judge real routing quality.
+  tool. This is what surfaced that several security-flavored questions
+  (account compromise, lost data, account lockout) and one status question
+  were getting pulled toward other tools instead of the FAQ's
+  already-documented self-service answer -- caught systematically across
+  the whole dataset instead of one case at a time. Offline result is now a
+  clean 32/32 (100%), reached largely by removing the two competing tools
+  rather than continuing to patch tiebreakers around them. Costs real API
+  calls to run meaningfully against a real model (~4 calls x 32 questions);
+  the offline fake-client run is a structural smoke test, not a substitute
+  for validating real routing quality.
 - **Retry logic that skips retrying errors that can never succeed** (bad key,
   malformed request) instead of wasting 3 attempts on something guaranteed to
   fail every time.
@@ -303,16 +303,18 @@ worth building along the way:
   presenting a bad-fit answer as if it were correct.
 - **The replan loop now actually tells the planner what failed and why.**
   Found via live testing: "why is the site slow today?" (which the KB
-  answers directly under `troubleshooting`) got routed to
-  `check_system_status` instead, whose generic "systems operational"
-  response correctly failed verification -- but the retry produced the
-  *identical* plan every time, since `verification_reasoning` was computed
-  and even logged in the trace but never fed back into the next plan
-  attempt. Six identical retries later, it force-escalated to a human for
-  something the FAQ could have answered. The plan node now includes the
+  answers directly under `troubleshooting`) got routed to a competing tool
+  instead (since removed, see "Removed, and why" above), whose generic
+  status response correctly failed verification -- but the retry produced
+  the *identical* plan every time, since `verification_reasoning` was
+  computed and even logged in the trace but never fed back into the next
+  plan attempt. Six identical retries later, it force-escalated to a human
+  for something the FAQ could have answered. The plan node now includes the
   previous attempt's tool and failure reason as explicit context on replan,
   so a second attempt has a real chance to try something different instead
-  of repeating the same mistake until the iteration budget runs out.
+  of repeating the same mistake until the iteration budget runs out. This
+  fix is generic (not tied to any specific tool) and stays valuable
+  regardless of which tools exist.
 
 ## How I'd evaluate this in production
 
@@ -338,9 +340,9 @@ would signal the tool set or prompts need attention.
 
 **With two more weeks**: Postgres and pgvector instead of the in-memory store
 for real persistence and concurrent access; a larger labeled eval set with
-LLM-as-judge wired into CI instead of the current rule-based scoring; a
-"Pending Reviews" panel in the dev UI so the human-in-the-loop
-approve/reject flow is demoable end-to-end from one screen instead of
-needing curl or `/docs` (the backend for this already exists --
-`GET /reviews`, `POST /reviews/{id}/approve`, `POST /reviews/{id}/reject` --
-it's only the UI side that's missing).
+LLM-as-judge wired into CI instead of the current rule-based scoring; if
+human-in-the-loop escalation approval turns out to matter in practice, build
+it properly next time -- a review queue with a UI to approve/reject from on
+day one, not bolted on afterward with no way to interact with it except
+curl or `/docs` (which is exactly what happened here, and exactly why it got
+pulled back out rather than shipped half-integrated).

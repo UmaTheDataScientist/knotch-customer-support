@@ -47,7 +47,6 @@ class ChatMessageOut(BaseModel):
     tools_used: list[str] = Field(default_factory=list)
     verified: bool
     iterations: int = 1
-    pending_review_id: Optional[str] = None
 
 
 class ConversationTurnOut(BaseModel):
@@ -70,19 +69,6 @@ class ConversationListOut(BaseModel):
     conversations: list[ConversationSummaryOut]
 
 
-class PendingReviewOut(BaseModel):
-    review_id: str
-    conversation_id: str
-    user_message: str
-    sub_plans: list[dict]
-    status: str
-    created_at: datetime
-
-
-class ReviewListOut(BaseModel):
-    reviews: list[PendingReviewOut]
-
-
 class TraceStepType(str, Enum):
     COMPLIANCE_CHECK = "compliance_check"
     PLAN = "plan"
@@ -90,7 +76,6 @@ class TraceStepType(str, Enum):
     OBSERVE = "observe"
     VERIFY = "verify"
     REPLAN = "replan"
-    AWAIT_REVIEW = "await_review"
     FINAL_RESPONSE = "final_response"
 
 
