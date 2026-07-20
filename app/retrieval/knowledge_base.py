@@ -13,11 +13,20 @@ reasoning travels with the code):
    query. This is exactly the `ask_user_clarification` tool's job at
    runtime, so we let the agent handle it dynamically instead of baking
    a fake KB entry for it.
-3. "help!!! my account is locked" -> this *is* a real support case, just
-   noisily formatted. We normalize (strip exclamation spam, lowercase
-   sentiment) for the embedding text while preserving the original
-   question/answer for display, so retrieval quality doesn't degrade due
-   to formatting noise.
+3. "help!!! my account is locked" -> the QUESTION is a real support case,
+   just noisily formatted, so we normalize (strip exclamation spam) for
+   the embedding text. But the source data's ANSWER for this entry was
+   separately broken, not just noisy: it read "pls help me unlock it
+   ASAP!!!" -- another frustrated statement in the same voice as the
+   question, not actual guidance. Retrieval was confirmed to surface this
+   verbatim as the top match for realistic phrasings of the question,
+   which would have handed a nonsensical non-answer to a real user. This
+   is a different failure mode than formatting noise: no amount of
+   normalizing the question fixes a broken answer. The answer was
+   corrected to real guidance, consistent with the account-lockout
+   language already used elsewhere in the system (the `locked` status
+   copy in `app/agents/graph.py::_answer_for_tool`), and the question
+   itself is untouched.
 4. Everything else is well-formed and indexed as-is.
 """
 from __future__ import annotations

@@ -15,6 +15,20 @@ def test_noisy_entry_still_indexed_and_normalized(faq_items):
     assert "!!!" not in noisy.normalized_question
 
 
+def test_locked_account_entry_has_real_guidance_not_the_original_broken_answer(faq_items):
+    """Regression test: the source data's answer for this entry was
+    'pls help me unlock it ASAP!!!' -- another frustrated statement in the
+    same voice as the question, not actual guidance. Confirmed via live
+    testing that it could be retrieved and handed to a user verbatim as
+    the "answer" to their own question. This checks the corrected content
+    directly, independent of embedding/ranking behavior."""
+    locked = next(i for i in faq_items if "locked" in i.question.lower())
+    assert "pls help me unlock it asap" not in locked.answer.lower()
+    assert "asap!!!" not in locked.answer.lower()
+    # It should read as real guidance, not another complaint.
+    assert any(word in locked.answer.lower() for word in ("wait", "contact", "support", "login"))
+
+
 def test_all_other_items_indexed(faq_items):
     non_flagged = [i for i in faq_items if i.question not in {"x"}]
     assert all(i.indexed for i in non_flagged)

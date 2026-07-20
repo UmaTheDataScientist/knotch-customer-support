@@ -177,14 +177,19 @@ re-embeds rows that actually changed. Conversation history is kept in memory
 per `conversation_id`, with older turns compressed into a running summary
 instead of growing the context forever.
 
-The provided FAQ dataset is intentionally messy. Two entries needed a judgment
-call, documented in `app/retrieval/knowledge_base.py`: `"x"` is excluded from
-the *searchable* index since its answer is itself an instruction to ask for
-clarification, not a fact, indexing it would make it falsely match almost any
-short query, and `ask_user_clarification` already handles that case
-dynamically. `"help!!! my account is locked"` is a real case just noisily
-formatted, so it's kept, with a normalized version used only for the
-embedding text so the formatting noise doesn't hurt retrieval.
+The provided FAQ dataset is intentionally messy. A few entries needed a
+judgment call, documented in `app/retrieval/knowledge_base.py`: `"x"` is
+excluded from the *searchable* index since its answer is itself an
+instruction to ask for clarification, not a fact, indexing it would make it
+falsely match almost any short query, and `ask_user_clarification` already
+handles that case dynamically. `"help!!! my account is locked"` has a real,
+legitimate question, just noisily formatted, so the question is kept with a
+normalized version used only for the embedding text. Its stored *answer*,
+though, was separately broken, not just noisy ("pls help me unlock it
+ASAP!!!" -- another frustrated statement, not guidance), confirmed via live
+testing to surface verbatim as the top match for realistic phrasings of the
+question. That's corrected to real guidance in the data itself, since no
+amount of query-side normalization fixes a broken answer.
 
 ## Bonus points implemented
 

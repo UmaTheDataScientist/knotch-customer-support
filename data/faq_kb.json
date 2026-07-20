@@ -31,7 +31,7 @@
     {"id": "kb_029", "question": "Recognize a phishing email from us", "answer": "We never ask for your password or 2FA codes. Verify sender domain and links before clicking.", "category": "security"},
     {"id": "kb_030", "question": "My session was terminated unexpectedly", "answer": "This can occur after a password change or sign-in from a new device. Re-login and review active sessions in Settings -> Security.", "category": "security"},
     {"id": "kb_031", "question": "Where can I find the API key?", "answer": "Settings -> Developer -> API Keys. Create and copy a secret key; store it securely.", "category": "developer"},
-    {"id": "kb_032", "question": "help!!! my account is locked", "answer": "pls help me unlock it ASAP!!!", "category": "security", "flagged": "noisy_formatting_normalized"},
+    {"id": "kb_032", "question": "help!!! my account is locked", "answer": "Accounts are usually locked after several failed login attempts or a security flag. Wait 15 minutes and try again, or contact support with your account details to unlock it sooner.", "category": "security", "flagged": "noisy_question_and_broken_answer_corrected"},
     {"id": "kb_033", "question": "x", "answer": "Please provide more details about your issue.", "category": "troubleshooting", "flagged": "excluded_from_index_ambiguous_meta_entry"}
   ]
 }
