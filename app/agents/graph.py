@@ -76,6 +76,32 @@ def _is_password_or_login_related(message: str) -> bool:
     return any(pattern.search(message) for pattern in _PASSWORD_OR_LOGIN_PATTERNS)
 
 
+# Deterministic fast path for messages too short/vague to carry any real
+# intent (e.g. "p", "x", "help"): the plan prompt already tells the model to
+# use ask_user_clarification for exactly this case, but live testing found
+# it doesn't reliably do that once there's conversation history to latch
+# onto -- given prior turns about, say, 2FA and then site slowness, a bare
+# "p" got interpreted first as "continue the 2FA setup" (iteration 1), and
+# after verify correctly rejected that as unsupported by the actual message,
+# the replan invented a second, different unrelated intent ("why is the
+# site slow") rather than asking for clarification. The model is treating
+# "the conversation history already resolves this ambiguity" (a real,
+# legitimate case when the previous turn was itself a clarifying question)
+# as if it applies whenever ANY history exists, which is a different and
+# wrong condition. Rather than tune the prompt wording a third time, this
+# removes the judgment call the same way as the password fast path: a bare
+# short message is only ever treated as resolvable via history when the
+# conversation is actually mid-clarification (self._conv.pending_clarification
+# is True); otherwise, on the first attempt, it always asks for clarification
+# instead of guessing.
+_VAGUE_LITERALS = {"help", "help!", "help!!!"}
+
+
+def _is_too_vague_to_act_on(message: str) -> bool:
+    stripped = message.strip()
+    return len(stripped) <= 3 or stripped.lower() in _VAGUE_LITERALS
+
+
 def _force_search_faq_first(sub_plans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """First-attempt structural override: rewrite any general_knowledge_lookup
     sub-plan into a search_faq call instead.
@@ -142,6 +168,7 @@ class SupportAgentGraph:
         self._tools = tools
         self._settings = settings
         self._conv = conversation_state
+        self._faq_categories = list(faq_categories)
         # Built once per graph instance from the real KB categories -- see
         # build_plan_system_prompt's docstring for why this isn't a static
         # hardcoded string.
@@ -233,6 +260,26 @@ class SupportAgentGraph:
                     }
                 ]
                 trace.detail["fast_path"] = "password_or_login"
+            elif (
+                state["iteration"] == 1
+                and not self._conv.pending_clarification
+                and _is_too_vague_to_act_on(state["user_message"])
+            ):
+                sub_plans = [
+                    {
+                        "intent": "ambiguous",
+                        "tool": "ask_user_clarification",
+                        "tool_args": {
+                            "question": "Could you share a bit more detail about what you're trying to do?"
+                        },
+                        "reasoning": (
+                            "Deterministic fast path: message too short/vague to act on, and there's no "
+                            "clarifying question in progress for it to be an answer to, so it must not be "
+                            "inferred from unrelated earlier conversation history."
+                        ),
+                    }
+                ]
+                trace.detail["fast_path"] = "too_vague"
             else:
                 messages = [{"role": "system", "content": self._plan_system_prompt}]
                 if self._conv.pending_clarification:
@@ -256,8 +303,11 @@ class SupportAgentGraph:
                                 f"IMPORTANT: You already tried this ({tried_tools}) and it failed "
                                 f"verification for this reason: \"{previous_failure_reason}\". Do NOT "
                                 "produce the identical plan again -- that will fail the same way. Try "
-                                "a genuinely different approach: a different tool, a reworded query, or "
-                                "escalate_to_human if nothing else plausibly resolves this."
+                                "a genuinely different approach: a different tool, a reworded query, "
+                                "ask_user_clarification if the user's OWN message is the actual problem "
+                                "(too vague, unclear, or nonsensical to interpret confidently, rather than "
+                                "the wrong tool having been picked for a clear request), or escalate_to_human "
+                                "if nothing else plausibly resolves this."
                             ),
                         }
                     )
@@ -515,8 +565,7 @@ class SupportAgentGraph:
         )
         return result.content
 
-    @staticmethod
-    def _fallback_args(tool_name: str, user_message: str) -> dict[str, Any]:
+    def _fallback_args(self, tool_name: str, user_message: str) -> dict[str, Any]:
         if tool_name == "search_faq":
             return {"query": user_message}
         if tool_name == "ask_user_clarification":
@@ -528,7 +577,13 @@ class SupportAgentGraph:
         if tool_name == "general_knowledge_lookup":
             return {"query": user_message}
         if tool_name == "get_faq_by_category":
-            return {"category": "troubleshooting"}
+            # Derived from the real KB categories (self._faq_categories), not a
+            # literal category name -- this fallback only fires when the
+            # model's own tool_args failed validation, and picking a name that
+            # happens to exist today would silently break the moment that
+            # category is renamed or removed from data/faq_kb.json.
+            fallback_category = sorted(self._faq_categories)[0] if self._faq_categories else ""
+            return {"category": fallback_category}
         return {}
 
     @staticmethod

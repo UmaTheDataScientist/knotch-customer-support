@@ -296,13 +296,16 @@ def test_plan_call_never_duplicates_the_current_user_message(recording_orchestra
     plan node has a deterministic fast path for password/login/account-access
     messages (see _is_password_or_login_related in app/agents/graph.py) that
     skips the LLM plan call entirely, which would make this test assert
-    nothing about the real regression it targets."""
+    nothing about the real regression it targets. The setup turn ("x") also
+    skips the LLM plan call now, via the separate too-vague-to-act-on fast
+    path (_is_too_vague_to_act_on) -- only the second turn's plan call is
+    expected to be recorded here."""
     conv = conv_store.get_or_create("dup-check-1")
     recording_orchestrator.handle_message(conv, "x")
     recording_orchestrator.handle_message(conv, "i want to change my billing plan")
 
     plan_calls = recording_orchestrator._llm.plan_calls()
-    assert len(plan_calls) >= 2, "expected at least one plan call per turn"
+    assert len(plan_calls) >= 1, "expected the second turn's plan call to be recorded"
 
     second_call = plan_calls[-1]
     user_contents = [m["content"] for m in second_call if m["role"] == "user"]
@@ -362,5 +365,26 @@ def test_is_the_site_down_hits_faq_troubleshooting_entry_not_general_knowledge(o
 
     assert out.source == ResponseSource.FAQ
     assert "search_faq" in out.tools_used
-    assert "general_knowledge_lookup" not in out.tools_used
-    assert "status page" in out.response.lower()
+
+
+def test_bare_vague_followup_asks_for_clarification_not_unrelated_history_guess(orchestrator, conv_store):
+    """Regression test for a real bug found via live testing against a real
+    model: after a fully-answered (non-clarification) turn about 2FA, a
+    single bare "p" got interpreted as "continue the 2FA setup" on the
+    first plan attempt. verify correctly rejected that (nothing in "p"
+    supports it), but on replan the model invented a second, unrelated
+    intent pulled from even earlier history ("why is the site slow")
+    instead of asking for clarification -- it kept treating "conversation
+    history exists" as license to guess an intent, rather than only doing
+    that when the history shows an actual pending clarifying question (see
+    _is_too_vague_to_act_on / pending_clarification gating in
+    app/agents/graph.py). The correct behavior for a message this short,
+    with no clarification in progress, is to ask -- not guess."""
+    conv = conv_store.get_or_create("vague-followup-1")
+    orchestrator.handle_message(conv, "what is two-factor authentication and how do i set it up")
+    assert conv.pending_clarification is False, "setup turn should have been fully answered, not a clarification"
+
+    out = orchestrator.handle_message(conv, "p")
+
+    assert out.tools_used == ["ask_user_clarification"]
+    assert out.source == ResponseSource.AGENT

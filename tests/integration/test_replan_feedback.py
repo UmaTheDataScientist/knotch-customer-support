@@ -112,3 +112,34 @@ def test_replan_includes_the_previous_failure_reason_and_tool(faq_items, tmp_pat
     assert feedback_messages, "second plan call should include feedback about the first attempt's failure"
     assert _FailFirstVerifyClient.FAILURE_REASON in feedback_messages[0]
     assert _FailFirstVerifyClient.FIRST_TOOL in feedback_messages[0]
+
+
+def test_replan_feedback_offers_clarification_not_just_reword_or_escalate(faq_items, tmp_path):
+    """Regression test for a real bug found via live testing: after a
+    failed verification, the feedback message only named two recovery
+    options -- "a reworded query" or "escalate_to_human" -- and never
+    mentioned ask_user_clarification, even though it's a real tool and
+    often the correct one when the ORIGINAL user message is the actual
+    problem (too vague/nonsensical to interpret), not the tool that got
+    picked for it. That omission biased the model toward re-trying or
+    escalating gibberish-style input instead of the simpler, correct move
+    of asking the user what they meant. This test locks in that the
+    feedback message actually names ask_user_clarification as an option."""
+    llm = _FailFirstVerifyClient()
+    index = EmbeddingIndex(llm, cache_path=tmp_path / "cache2.json")
+    index.build(faq_items)
+    settings = Settings(llm_provider="fake", max_agent_iterations=4, max_verification_retries=2, faq_top_k=3, faq_min_score=0.05)
+    orchestrator = SupportOrchestrator(llm=llm, settings=settings, index=index, faq_items=faq_items)
+
+    from app.core.state import ConversationStore
+
+    conv = ConversationStore().get_or_create("replan-feedback-2")
+    orchestrator.handle_message(conv, "a plain support question")
+
+    plan_calls = llm.plan_calls()
+    second_call_messages = plan_calls[1]
+    feedback_messages = [
+        m["content"] for m in second_call_messages if m["role"] == "system" and "already tried this" in m["content"]
+    ]
+    assert feedback_messages, "second plan call should include feedback about the first attempt's failure"
+    assert "ask_user_clarification" in feedback_messages[0]
