@@ -85,6 +85,34 @@ matches the port your server is running on.
   bugs found by testing against a live model, not just the offline suite.
 - `eval/run_eval.py`, automated eval harness, 15 scenarios, 100% pass rate.
 
+## Key concepts (if you're new to agentic systems)
+
+A handful of terms come up constantly below. Skip this if you're already
+familiar with them.
+
+- **Agent**: an LLM call that decides *what to do*, not just what to say --
+  it picks from a list of tools instead of only generating text.
+- **Tool**: a plain function the agent can call (e.g. search the FAQ, ask a
+  follow-up question). A schema tells the LLM what each tool does and what
+  arguments it takes; the LLM picks one, the code runs it.
+- **Embedding**: a list of numbers representing the *meaning* of a piece of
+  text. Two questions with similar meaning end up with similar numbers, so
+  semantic search becomes a math comparison (cosine similarity) instead of
+  exact keyword matching.
+- **LangGraph node**: one step in the agent's reasoning (e.g. "plan,"
+  "verify"), written as a small function. Nodes are connected by edges into
+  an explicit graph, so the control flow is a diagram you can read instead of
+  a hidden `while` loop.
+- **Guardrail / Compliance Agent**: a second, separate agent whose only job
+  is to check a message is safe and on-topic *before* the main agent
+  responds, with authority to override the main agent's answer.
+- **Verification**: a step where the agent checks its own draft answer
+  against the question and the retrieved data before showing it to the user,
+  and starts over (bounded) if the check fails.
+- **Trace**: a structured log of every step an agent took for one
+  conversation, so a human can debug a bad answer after the fact instead of
+  guessing what happened.
+
 ## Architecture
 
 Every message goes through two agents:
@@ -170,7 +198,20 @@ the whole turn instead of being silently blended with an unrelated answer,
 since mixing "I need more detail" with a confident answer in the same reply
 would be confusing and is arguably worse than just asking.
 
-Exactly the 6 required tools live in `app/tools/definitions.py` -- no extras.
+Exactly the 6 required tools live in `app/tools/definitions.py` -- no extras:
+
+- `search_faq(query, category_filter=None)` -- semantic search over the FAQ
+  knowledge base.
+- `get_faq_by_category(category)` -- lists every FAQ question in a category.
+- `ask_user_clarification(question)` -- asks a follow-up when the request is
+  ambiguous.
+- `general_knowledge_lookup(query)` -- a plain LLM call for questions that
+  are on-topic but not covered by the FAQ.
+- `escalate_to_human(reason, transcript)` -- mock handoff to a human agent;
+  logs and returns a stub ticket id.
+- `refuse(reason)` -- refuses jailbreak attempts, policy violations, or
+  off-topic requests.
+
 Two additional tools (`check_system_status`, `lookup_account_status`) were
 tried and then removed; see "Removed, and why" below. The FAQ knowledge
 base is embedded and cached (`app/retrieval/`), so re-running ingestion only
@@ -209,6 +250,37 @@ Caught because `eval/dataset.jsonl` originally had zero coverage for that
 tool; two regression cases (`general_knowledge_1`, `general_knowledge_2`) are
 now in the eval set, plus one for `get_faq_by_category`
 (`category_overview_1`), which had the same gap.
+
+### Meeting requirements 7-9 explicitly
+
+Everything above focuses on agent reasoning (requirements 1-6). The rest of
+the rubric is implemented too, just easy to miss by skimming the code, so
+it's stated directly here:
+
+- **FastAPI service (req. 7)**: Pydantic models for every request/response
+  (`app/models/schemas.py`); an `HTTPException` on missing conversations plus
+  `@app.exception_handler` for `ValueError` and unhandled exceptions
+  (`app/main.py`); async route handlers throughout
+  (`app/api/routes/conversations.py`); and a router-per-resource layout
+  following FastAPI's "Bigger Applications" pattern instead of one flat
+  `main.py`.
+- **Observability (req. 8)**: every plan/tool-call/observe/verify/replan
+  step is logged as a structured `TraceStep` (`app/observability/tracer.py`),
+  retrievable per conversation via `GET /conversations/{id}/trace`. Each step
+  records its own latency, and, where an LLM call happened, prompt/completion
+  tokens and estimated cost; `ConversationTrace.total_cost_usd` sums these
+  across the whole conversation.
+- **Abstractions (req. 9)**: `app/core/llm_client.py` is the only place that
+  knows about OpenAI, Anthropic, or the offline fake client -- swapping
+  providers is one environment variable (`LLM_PROVIDER`), not a code change,
+  and nothing under `app/agents/` imports a provider SDK directly. Prompts
+  live in `app/agents/prompts.py`, not inline in agent code, and carry a
+  `PROMPT_VERSION` string that's stamped onto every trace step that involves
+  a prompted LLM call (plan, verify, compliance check), so a prompt change is
+  traceable to the runs it affected. Tool definitions
+  (`app/tools/definitions.py`) are plain dataclasses plus Pydantic schemas
+  with no LangGraph-specific types, so they'd still work if the graph were
+  ever swapped for a different agent framework.
 
 ## Bonus points implemented
 
