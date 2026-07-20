@@ -255,7 +255,7 @@ class FakeLLMClient(LLMClient):
         "troubleshooting", "developer", "settings", "account_lifecycle", "data_recovery",
         "security_incident",
     )
-    _GENERAL_KNOWLEDGE_HINTS = ("rule of thumb", "conceptually", "in general,")
+    _GENERAL_KNOWLEDGE_HINTS = ("rule of thumb", "conceptually", "in general,", "is the site down")
 
     @classmethod
     def _route(cls, system: str, user_text: str, json_mode: bool) -> str:

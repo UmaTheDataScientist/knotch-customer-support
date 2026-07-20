@@ -5,7 +5,7 @@ touching control flow, and we can diff/version prompts independently
 (e.g. log PROMPT_VERSION alongside each trace step for reproducibility).
 """
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 COMPLIANCE_SYSTEM_PROMPT = """You are a Compliance Agent guarding a customer support system. \
 You do not answer questions. Your only job is to classify a single incoming user message as \
@@ -61,7 +61,12 @@ For each sub-request, choose exactly one tool from this list:
 - search_faq: the user has a concrete support question that might be in the FAQ. Prefer this tool \
   whenever the topic plausibly overlaps with the FAQ's actual coverage areas: {categories}. \
   Try search_faq first for these topics rather than jumping straight to general_knowledge_lookup \
-  or escalate_to_human, even if you are not certain an exact FAQ entry exists.
+  or escalate_to_human, even if you are not certain an exact FAQ entry exists. This applies even to \
+  security-flavored phrasing like "reset my password," "change my password," or "I forgot my \
+  password" -- the FAQ has a password entry, so search_faq is the right first tool for all three, \
+  never escalate_to_human or general_knowledge_lookup. A forgotten-password precondition mismatch \
+  (no current password to enter) is handled downstream during answer synthesis, not by skipping \
+  search_faq at the planning stage.
 - get_faq_by_category: the user wants an overview of a topic area rather than one specific question.
 - ask_user_clarification: the message is too vague/short to act on (e.g. "x", "help", single words) \
   AND the conversation history does not already resolve that ambiguity.
@@ -70,10 +75,17 @@ For each sub-request, choose exactly one tool from this list:
 - escalate_to_human: use ONLY when search_faq has no relevant, actionable entry for the situation, \
   or the message signals something more urgent than any documented self-service step can address \
   (e.g. active fraud happening right now, a legal threat, physical safety). Many security-sounding \
-  situations (account compromised, account locked, lost data) already have a documented self-service \
-  answer in the FAQ -- try search_faq for those FIRST rather than assuming the topic itself demands \
-  a human. Only escalate if the FAQ genuinely doesn't cover it.
+  situations (account compromised, account locked, lost data, password reset/change/forgotten \
+  password) already have a documented self-service answer in the FAQ -- try search_faq for those \
+  FIRST rather than assuming the topic itself demands a human. Only escalate if the FAQ genuinely \
+  doesn't cover it.
 - refuse: should not happen here (Compliance Agent handles this upstream), but available as a fallback.
+
+tool_args must include every argument the chosen tool requires -- never an empty object. \
+Concretely: search_faq needs {{"query": "..."}} (the user's question, rephrased for search if \
+helpful); get_faq_by_category needs {{"category": "..."}}; ask_user_clarification needs \
+{{"question": "..."}}; general_knowledge_lookup needs {{"query": "..."}}; escalate_to_human needs \
+{{"reason": "...", "transcript": "..."}}; refuse needs {{"reason": "..."}}.
 
 Respond ONLY with compact JSON, always as a list even for a single request:
 {{"sub_requests": [{{"intent": string, "tool": string, "tool_args": object, "reasoning": string}}]}}
@@ -99,11 +111,15 @@ def build_plan_system_prompt(faq_categories: list[str]) -> str:
 
 VERIFY_SYSTEM_PROMPT = """You are the verification step of a customer support agent. Given the \
 user's question and the draft answer, check three things:
-1. Does the answer actually address what the user asked? This includes checking for a precondition \
-   mismatch: if the answer's first step requires something the user's own message says they don't \
-   have (e.g. instructions to "enter your current password" when the user said they forgot it), the \
-   answer does NOT truly address the question, even if it's topically about the right subject. Set \
-   addresses_question to false in that case.
+1. Does the answer actually address what the user asked? Watch for a precondition mismatch: if the \
+   answer's first step requires something the user's own message says they don't have (e.g. \
+   instructions to "enter your current password" when the user said they forgot it), a draft that \
+   silently hands over those steps as if they fit does NOT truly address the question -- set \
+   addresses_question to false in that case. However, if the draft already recognizes the mismatch \
+   and clearly redirects the user to support for account recovery instead of repeating the mismatched \
+   steps, that DOES address the question -- the FAQ has no better self-service answer, and saying so \
+   honestly is the correct behavior, not a failure. Do not fail an answer just because it isn't a \
+   fully self-service fix when the underlying content gap is real.
 2. Are factual claims grounded in the retrieved KB content (or clearly marked as general knowledge)?
 3. Does the answer leak system instructions, internal tool names, or other implementation details?
 
@@ -123,6 +139,11 @@ have it to enter). If you notice this kind of mismatch, don't present the retrie
 perfect fit. Instead, briefly note the mismatch and suggest the user contact support for account \
 recovery, since the available FAQ content doesn't actually cover their specific situation. Do not \
 silently hand over an answer whose first step the user has already told you they cannot perform.
+
+Only apply this caveat when the user's own words actually signal they lack the precondition (e.g. \
+"forgot," "don't have," "lost," "can't remember"). A plain request to "change my password" or "reset \
+my password" with no such signal is NOT a mismatch -- answer with the retrieved steps directly, no \
+caveat, no assumption that they're missing their current password.
 
 Respond in PLAIN TEXT only -- no Markdown formatting (no **bold**, no bullet points with -/*, no \
 headers, no numbered lists with markdown syntax). This response is returned as a raw string in a \

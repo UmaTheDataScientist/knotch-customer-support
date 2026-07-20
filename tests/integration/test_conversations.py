@@ -290,17 +290,77 @@ def test_plan_call_never_duplicates_the_current_user_message(recording_orchestra
     follow-up answer as "the user is vaguely repeating themselves." The
     offline FakeLLMClient couldn't catch this because it only inspects the
     last user message, not the full message shape -- this test inspects
-    the actual messages list instead."""
+    the actual messages list instead.
+
+    Uses a billing follow-up rather than a password one deliberately: the
+    plan node has a deterministic fast path for password/login/account-access
+    messages (see _is_password_or_login_related in app/agents/graph.py) that
+    skips the LLM plan call entirely, which would make this test assert
+    nothing about the real regression it targets."""
     conv = conv_store.get_or_create("dup-check-1")
     recording_orchestrator.handle_message(conv, "x")
-    recording_orchestrator.handle_message(conv, "i forgot my password")
+    recording_orchestrator.handle_message(conv, "i want to change my billing plan")
 
     plan_calls = recording_orchestrator._llm.plan_calls()
     assert len(plan_calls) >= 2, "expected at least one plan call per turn"
 
     second_call = plan_calls[-1]
     user_contents = [m["content"] for m in second_call if m["role"] == "user"]
-    assert user_contents.count("i forgot my password") == 1, (
-        f"the current user message appeared {user_contents.count('i forgot my password')} times "
-        f"in the planner's message list, expected exactly 1: {user_contents}"
+    assert user_contents.count("i want to change my billing plan") == 1, (
+        f"the current user message appeared {user_contents.count('i want to change my billing plan')} "
+        f"times in the planner's message list, expected exactly 1: {user_contents}"
     )
+
+
+def test_force_search_faq_first_rewrites_general_knowledge_lookup():
+    """Unit test for the standalone override, isolated from any LLM/tool
+    plumbing: a general_knowledge_lookup sub-plan becomes a search_faq call
+    with the same query preserved, and any other tool passes through
+    untouched (e.g. a sub-plan that already picked search_faq, or one
+    the planner correctly sent to ask_user_clarification)."""
+    from app.agents.graph import _force_search_faq_first
+
+    sub_plans = [
+        {
+            "intent": "site_status",
+            "tool": "general_knowledge_lookup",
+            "tool_args": {"query": "is the site down?"},
+            "reasoning": "no FAQ coverage for live status checks",
+        },
+        {
+            "intent": "ambiguous",
+            "tool": "ask_user_clarification",
+            "tool_args": {"question": "Could you share more detail?"},
+            "reasoning": "too vague",
+        },
+    ]
+
+    forced = _force_search_faq_first(sub_plans)
+
+    assert forced[0]["tool"] == "search_faq"
+    assert forced[0]["tool_args"] == {"query": "is the site down?"}
+    assert forced[1] == sub_plans[1]
+
+
+def test_is_the_site_down_hits_faq_troubleshooting_entry_not_general_knowledge(orchestrator, conv_store):
+    """Regression test for a real bug: the planner judged "is the site
+    down?" as having no plausible FAQ coverage and routed it straight to
+    general_knowledge_lookup, which can only answer with a generic
+    "I can't check specific websites" non-answer -- even though the KB has
+    a real troubleshooting entry for exactly this ("Why is the site slow
+    today? Check status page for incidents...", kb_028) that search_faq
+    would have found. See _force_search_faq_first in app/agents/graph.py:
+    general_knowledge_lookup is no longer trusted on the first attempt, so
+    search_faq always gets a chance to find this entry first.
+
+    FakeLLMClient's offline planner heuristic is extended (see
+    _GENERAL_KNOWLEDGE_HINTS in app/core/llm_client.py) to reproduce the
+    real model's wrong first instinct for this phrasing, so this test
+    actually exercises the override rather than never triggering it."""
+    conv = conv_store.get_or_create("site-down-1")
+    out = orchestrator.handle_message(conv, "Is the site down today?")
+
+    assert out.source == ResponseSource.FAQ
+    assert "search_faq" in out.tools_used
+    assert "general_knowledge_lookup" not in out.tools_used
+    assert "status page" in out.response.lower()

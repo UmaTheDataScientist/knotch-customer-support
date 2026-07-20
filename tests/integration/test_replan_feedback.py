@@ -22,7 +22,11 @@ class _FailFirstVerifyClient(RecordingLLMClient):
     times)."""
 
     FAILURE_REASON = "The answer does not address what the user actually asked."
-    FIRST_TOOL = "general_knowledge_lookup"
+    # Deliberately NOT general_knowledge_lookup: _force_search_faq_first
+    # (app/agents/graph.py) rewrites that tool to search_faq on the first
+    # attempt, which would make this test assert on the override's tool
+    # name instead of the replan-feedback behavior it actually targets.
+    FIRST_TOOL = "get_faq_by_category"
 
     def __init__(self):
         super().__init__()
@@ -43,7 +47,7 @@ class _FailFirstVerifyClient(RecordingLLMClient):
                                 {
                                     "intent": "scripted_first_attempt",
                                     "tool": self.FIRST_TOOL,
-                                    "tool_args": {"query": "irrelevant for this test"},
+                                    "tool_args": {"category": "billing"},
                                     "reasoning": "scripted first attempt for this test",
                                 }
                             ]

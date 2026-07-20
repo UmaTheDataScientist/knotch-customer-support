@@ -24,6 +24,7 @@ whichever tool call happened to retrieve.
 from __future__ import annotations
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional, TypedDict
 
@@ -47,6 +48,66 @@ from app.tools.definitions import Tool
 # If any sub-request resolves to one of these, it short-circuits the whole
 # turn -- see module docstring.
 _DIRECT_RESPONSE_TOOLS = {"ask_user_clarification", "refuse", "escalate_to_human"}
+
+# Deterministic fast path for password/login/account-access messages: the
+# plan prompt already instructs the LLM to try search_faq first for exactly
+# this category (there's a real FAQ entry for it), but live testing found
+# the model repeatedly overrides that instruction anyway -- urgent-sounding
+# phrasing ("someone changed my password," "I can't access my account")
+# gets judged as needing immediate human escalation, skipping the FAQ
+# entirely. Rather than continue tuning prompt wording against a judgment
+# call that keeps going the wrong way, this removes the judgment call: on
+# the first plan attempt only, these messages always route to search_faq,
+# no LLM decision involved. If that answer turns out to be wrong for the
+# situation, verification can still fail it and the normal replan (with the
+# LLM free to choose escalate_to_human) takes over from there.
+_PASSWORD_OR_LOGIN_PATTERNS = [
+    re.compile(r"\bpassword\b", re.I),
+    re.compile(r"\blog(ged)?[\s-]?in\b", re.I),
+    re.compile(r"\bsign(ed)?[\s-]?in\b", re.I),
+    re.compile(r"\baccount\s+(is\s+)?locked\b", re.I),
+    re.compile(r"\blocked\s+out\b", re.I),
+    re.compile(r"\b(can'?t|cannot|unable to)\s+access\s+my\s+account\b", re.I),
+    re.compile(r"\bcompromised\b", re.I),
+]
+
+
+def _is_password_or_login_related(message: str) -> bool:
+    return any(pattern.search(message) for pattern in _PASSWORD_OR_LOGIN_PATTERNS)
+
+
+def _force_search_faq_first(sub_plans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """First-attempt structural override: rewrite any general_knowledge_lookup
+    sub-plan into a search_faq call instead.
+
+    This is the same bug class as the escalate_to_human tiebreaker (commit
+    4247326: "site is slow" was routing to a competing tool instead of the
+    FAQ's actual troubleshooting entry, fixed there by prompt wording alone).
+    It recurred for general_knowledge_lookup because prompt wording is a
+    judgment call the model doesn't reliably honor -- "is the site down?"
+    reads as a live-status question rather than a literal match for the
+    KB's "why is the site slow today?" entry, so the planner keeps picking
+    general_knowledge_lookup over search_faq for phrasings like it. Rather
+    than tune the prompt a third time, the judgment call is removed: on the
+    first attempt, general_knowledge_lookup is never trusted outright, it's
+    always tried against the FAQ first. If the FAQ genuinely has nothing,
+    the resulting "couldn't find" response fails verification and replans,
+    where general_knowledge_lookup is available again (see the "IMPORTANT:
+    you already tried this" system message in _plan_node).
+    """
+    forced = []
+    for sp in sub_plans:
+        if sp.get("tool") == "general_knowledge_lookup":
+            sp = dict(sp)
+            query = (sp.get("tool_args") or {}).get("query") or ""
+            sp["tool"] = "search_faq"
+            sp["tool_args"] = {"query": query}
+            sp["reasoning"] = (
+                "Forced search_faq before general_knowledge_lookup on the first attempt "
+                f"(original plan reasoning: {sp.get('reasoning', 'n/a')})"
+            )
+        forced.append(sp)
+    return forced
 
 
 class AgentState(TypedDict, total=False):
@@ -146,7 +207,7 @@ class SupportAgentGraph:
 
         with self._conv.tracer.step(TraceStepType.PLAN, iteration=state["iteration"]) as trace:
             if state["iteration"] > self._settings.max_agent_iterations:
-                # Failed to converge -> forced escalation rather than an infinite/失敗 loop.
+                # Failed to converge -> forced escalation rather than an infinite loop.
                 sub_plans = [
                     {
                         "intent": "unresolved",
@@ -159,6 +220,19 @@ class SupportAgentGraph:
                     }
                 ]
                 trace.detail["forced"] = True
+            elif state["iteration"] == 1 and _is_password_or_login_related(state["user_message"]):
+                sub_plans = [
+                    {
+                        "intent": "password_or_login_related",
+                        "tool": "search_faq",
+                        "tool_args": {"query": state["user_message"]},
+                        "reasoning": (
+                            "Deterministic fast path: password/login/account-access requests "
+                            "always search the FAQ first, no model judgment call involved."
+                        ),
+                    }
+                ]
+                trace.detail["fast_path"] = "password_or_login"
             else:
                 messages = [{"role": "system", "content": self._plan_system_prompt}]
                 if self._conv.pending_clarification:
@@ -194,6 +268,8 @@ class SupportAgentGraph:
                 self._conv.tracer.record_llm_usage(
                     trace, result.prompt_tokens, result.completion_tokens, result.estimated_cost_usd
                 )
+            if state["iteration"] == 1:
+                sub_plans = _force_search_faq_first(sub_plans)
             trace.detail["sub_plans"] = sub_plans
             trace.detail["prompt_version"] = PROMPT_VERSION
         state["sub_plans"] = sub_plans
